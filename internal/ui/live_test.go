@@ -49,7 +49,8 @@ func TestLive(t *testing.T) {
 	m := New(ctx, st, conn, "messenger")
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 24})
 	m = next.(Model)
-	next, _ = m.Update(m.Init()())
+	// Init batches the connect with timers; run the connect the way Bubble Tea would
+	next, _ = m.Update(startedMsg{conn.Start(ctx)})
 	m = next.(Model)
 	if m.statusErr {
 		t.Fatal(m.status)
