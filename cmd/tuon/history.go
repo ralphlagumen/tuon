@@ -35,8 +35,12 @@ func history() error {
 		return err
 	}
 	defer st.Close()
-	if err := useVault(st); err != nil {
+	kdb, allowNew, err := useVault(st)
+	if err != nil {
 		return err
+	}
+	if kdb != nil {
+		defer kdb.Close()
 	}
 	logFile, err := os.OpenFile(filepath.Join(store.Dir(), "tuon.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
@@ -53,6 +57,10 @@ func history() error {
 	if vlt != nil {
 		conn.SetSealer(vlt)
 	}
+	if kdb != nil {
+		conn.SetKeyDB(kdb)
+	}
+	conn.AllowNewDevice = allowNew
 	fmt.Println("\n  Connecting to Messenger…")
 	if err := conn.Start(ctx); err != nil {
 		return err

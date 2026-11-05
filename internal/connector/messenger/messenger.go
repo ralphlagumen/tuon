@@ -84,9 +84,14 @@ type Conn struct {
 	// so paging can tell when a page brought nothing new
 	threadsSeen atomic.Int64
 	known       map[int64]bool
-	seal        Sealer // encrypts the PIN-backup keys at rest; nil = plain
-	ctx         context.Context
-	cancel      context.CancelFunc
+	seal        Sealer  // encrypts the PIN-backup keys at rest; nil = plain
+	keyDB       *sql.DB // encrypted-chat keys (keys.db); nil = in db
+	// AllowNewDevice lets the connector register tuon as a new linked
+	// device when it finds no keys. Only a fresh setup may: if keys existed
+	// and can't be found, registering would silently replace them.
+	AllowNewDevice bool
+	ctx            context.Context
+	cancel         context.CancelFunc
 }
 
 var _ connector.Connector = (*Conn)(nil)
@@ -100,6 +105,9 @@ type Sealer interface {
 
 // SetSealer keeps the PIN-backup keys encrypted in the database.
 func (c *Conn) SetSealer(s Sealer) { c.seal = s }
+
+// SetKeyDB puts the encrypted-chat keys in their own (encrypted) database.
+func (c *Conn) SetKeyDB(db *sql.DB) { c.keyDB = db }
 
 // New makes a Messenger connector from a saved login.
 // db holds the encrypted-chat keys (shared with Tuon's own store).
@@ -503,7 +511,11 @@ func (c *Conn) LoadOlder(ctx context.Context, chatID string, before time.Time, b
 // ---- encrypted chats ----
 
 func (c *Conn) connectE2EE() {
-	container := sqlstore.NewWithDB(c.db, "sqlite3", waLog.Zerolog(c.log.With().Str("c", "wastore").Logger()))
+	kdb := c.keyDB
+	if kdb == nil {
+		kdb = c.db
+	}
+	container := sqlstore.NewWithDB(kdb, "sqlite3", waLog.Zerolog(c.log.With().Str("c", "wastore").Logger()))
 	if err := container.Upgrade(c.ctx); err != nil {
 		c.status("encrypted chats off", err)
 		return
@@ -517,6 +529,10 @@ func (c *Conn) connectE2EE() {
 	c.mu.Lock()
 	c.wadev = dev
 	c.mu.Unlock()
+	if dev.ID == nil && !c.AllowNewDevice {
+		c.status("encrypted chats off", errors.New("this device's encryption keys aren't available here; not registering a new device"))
+		return
+	}
 	if dev.ID == nil {
 		if err := c.cli.RegisterE2EE(c.ctx, c.self); err != nil {
 			c.status("encrypted chats off", fmt.Errorf("register device: %w", err))

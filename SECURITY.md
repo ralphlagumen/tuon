@@ -7,15 +7,22 @@ Tuon logs in to Messenger as you, keeps your encryption keys, and shows text and
 - **Your password is never stored.**
   - With the browser login, you type it into Facebook's own login page, in a normal browser window where you can check the address.
   - With the password login, it goes straight to Meta and is then dropped.
-- **Only the session is kept.** It's the cookies Meta gives back after you log in, saved in your system keychain (macOS Keychain, Windows Credential Manager, Linux Secret Service). If no keychain is available, Tuon falls back to a file only you can read.
+- **Only the session is kept, encrypted.** It's the cookies Meta gives back after you log in, stored in `login.enc` under tuon's own key (see below). Other apps can't read it: it is no longer kept in the keychain, where any program running as you could read it without a prompt.
 - **The browser login uses a throwaway profile.** It never reads your normal browser's cookies, and the temporary profile is deleted afterwards. Tuon talks to that window through Chrome's debugging port, which listens only on your computer and closes with the window.
-- **Your Messenger PIN is never stored.** `tuon history` uses it once to join Messenger's encrypted backup. The backup keys it gets back are kept in the database with your other encryption keys.
+- **Your Messenger PIN is never stored.** `tuon history` uses it once to join Messenger's encrypted backup. The backup keys it gets back are stored encrypted.
 - **You can remove it.** `tuon logout` deletes the session. `tuon logout --wipe` also deletes all local data.
+
+## The lock and tuon's key
+
+- **Tuon has its own key, and opening tuon asks for Touch ID or your Mac password.** The key is wrapped by a key inside your Mac's Secure Enclave, which never leaves the chip; only a small helper (`tuon-keyhelper`, built from source by `install.sh`) asks the chip to use it. On Linux and Windows, or a Mac without a Secure Enclave, a passphrase (stretched with Argon2id) protects the key instead, with longer waits after wrong tries.
+- **Tuon locks itself after 10 minutes without input**, or when you type `:lock`. The screen is cleared until you unlock.
+- **If you lose the passphrase** (or the Mac's Secure Enclave key, e.g. after resetting the Mac), the data can't be opened: log in again and restore older chats with your Messenger PIN.
 
 ## Data on your computer
 
 - Tuon creates its folder (`~/.config/tuon`) and files readable only by you, and fixes the permissions of older files on startup.
-- The database holds your chats, folders, the newest 1,000 messages per chat, and the keys for encrypted chats. It isn't encrypted itself, so turn on full-disk encryption (FileVault on macOS, BitLocker on Windows). Anyone who can read your files can read those messages and keys.
+- **Encrypted with tuon's key:** your session (`login.enc`), message text and attachments, chat previews, drafts, backup keys (in `tuon.db`), and every key for encrypted chats: this device's private keys and your sessions with contacts (`keys.db`, encrypted page by page). Deleted data is zeroed on disk.
+- **Not encrypted:** chat and contact names, folders, times. Keep full-disk encryption on (FileVault, BitLocker) for those.
 - Photos opened in your photo viewer go to a temporary folder that's deleted when Tuon starts and quits.
 - The log holds warnings only. `TUON_DEBUG=1` logs much more, which can include message details. Use it only for troubleshooting, and delete `tuon.log` after.
 
@@ -51,7 +58,7 @@ Keep FileVault (macOS) or BitLocker (Windows) on: it's what protects tuon's data
 
 - **Meta's terms.** Tuon uses Messenger the way Beeper does, through an unofficial route (mautrix-meta). Meta could ask you to verify your account or lock it.
 - **Linked device.** For encrypted chats, Tuon registers as one of your devices. You can see and remove it in Messenger's security settings.
-- **Your computer.** Right now any program running as you can read tuon's session from the keychain without a prompt, and anyone at your unlocked computer can open tuon. A Touch ID lock and encryption of the sensitive data are being built. Even then, malware running as you can, given time, watch your screen and keyboard: keep your computer clean and up to date.
+- **Your computer.** The lock and encryption stop other apps and anyone holding a copy of your files from reading tuon's data. They can't stop malware already running as you while tuon is unlocked: it could, given time, watch your screen and keyboard. Keep your computer clean and up to date.
 
 ## Use at your own risk
 

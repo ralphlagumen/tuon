@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -10,6 +12,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/ralph/tuon/internal/auth"
+	"github.com/ralph/tuon/internal/keystore"
 	"github.com/ralph/tuon/internal/store"
 	"github.com/ralph/tuon/internal/vault"
 )
@@ -131,21 +134,40 @@ func loggedIn() (bool, error) {
 }
 
 // useVault turns on encryption in the store (unlocking first if the vault
-// exists but this run got its login another way) and seals anything still
-// stored in the clear.
-func useVault(st *store.Store) error {
-	if vlt == nil && !vault.Exists(store.Dir()) {
-		return nil
+// exists but this run got its login another way), seals anything still
+// stored in the clear, and opens keys.db, moving the encrypted-chat keys
+// into it the first time. It returns keys.db (nil without a vault) and
+// whether registering a brand-new linked device is allowed.
+func useVault(st *store.Store) (*sql.DB, bool, error) {
+	dir := store.Dir()
+	fresh := st.Account() == "" && !keystore.Exists(dir) && !keystore.HasDevice(st.DB)
+	if vlt == nil && !vault.Exists(dir) {
+		return nil, fresh, nil
 	}
 	v, err := openVault()
 	if err != nil {
-		return err
+		return nil, false, err
 	}
 	st.SetCipher(v)
 	if n, err := st.EncryptAll(); err != nil {
-		return fmt.Errorf("encrypting stored messages: %w", err)
+		return nil, false, fmt.Errorf("encrypting stored messages: %w", err)
 	} else if n > 0 {
 		fmt.Printf("  Encrypted %d stored items.\n", n)
 	}
-	return nil
+	// "/2": the first key was printed by a bug (2026-11-05), so it's retired
+	kdb, err := keystore.Open(dir, v.DeriveKey("keys.db/2"))
+	if err != nil {
+		return nil, false, err
+	}
+	if err := keystore.Prepare(context.Background(), kdb); err != nil {
+		kdb.Close()
+		return nil, false, fmt.Errorf("preparing keys.db: %w", err)
+	}
+	if n, err := keystore.Move(st.DB, kdb); err != nil {
+		kdb.Close()
+		return nil, false, fmt.Errorf("moving encryption keys into keys.db: %w", err)
+	} else if n > 0 {
+		fmt.Printf("  Moved %d encryption keys into the encrypted key store.\n", n)
+	}
+	return kdb, fresh && !keystore.HasDevice(kdb), nil
 }

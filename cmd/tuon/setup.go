@@ -202,7 +202,7 @@ func sameAccount(creds auth.Creds) (bool, error) {
 	if a := strings.ToLower(strings.TrimSpace(readLine())); a != "y" && a != "yes" {
 		return false, nil
 	}
-	for _, name := range []string{"tuon.db", "tuon.db-wal", "tuon.db-shm", "cache"} {
+	for _, name := range []string{"tuon.db", "tuon.db-wal", "tuon.db-shm", "keys.db", "keys.db-wal", "keys.db-shm", "cache"} {
 		if err := os.RemoveAll(filepath.Join(store.Dir(), name)); err != nil {
 			return false, err
 		}

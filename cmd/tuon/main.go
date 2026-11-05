@@ -105,8 +105,12 @@ func run() error {
 		return err
 	}
 	defer st.Close()
-	if err := useVault(st); err != nil {
+	kdb, allowNew, err := useVault(st)
+	if err != nil {
 		return err
+	}
+	if kdb != nil {
+		defer kdb.Close()
 	}
 	_ = st.Prune(ui.KeepMessages)
 	_, _ = st.Compact()
@@ -135,6 +139,10 @@ func run() error {
 	if vlt != nil {
 		conn.SetSealer(vlt)
 	}
+	if kdb != nil {
+		conn.SetKeyDB(kdb)
+	}
+	conn.AllowNewDevice = allowNew
 	defer conn.Close()
 
 	model := ui.New(ctx, st, conn, "messenger")

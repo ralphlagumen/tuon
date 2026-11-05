@@ -185,6 +185,16 @@ func (v *Vault) CheckPassphrase(pass string) bool {
 	return err == nil
 }
 
+// DeriveKey gives a separate 32-byte key for one purpose (e.g. keys.db),
+// so the data key itself is never handed out.
+func (v *Vault) DeriveKey(purpose string) []byte {
+	k, err := hkdf.Key(sha256.New, v.key[:], nil, "tuon "+purpose, 32)
+	if err != nil {
+		panic(err) // fixed-size HKDF can't fail
+	}
+	return k
+}
+
 // Kind says how this vault unlocks.
 func (v *Vault) Kind() string { return v.kind }
 
