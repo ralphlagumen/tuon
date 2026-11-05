@@ -81,7 +81,8 @@ type Conn struct {
 	resetAt map[string]time.Time
 	// failed: per sender device, the distinct messages that failed to
 	// decrypt since the last one that worked (see trackFailure)
-	failed map[string]map[string]bool
+	failed    map[string]map[string]bool
+	okDevices map[string]bool // sender devices whose messages decrypted this run
 	// e2eeErr: why encrypted chats couldn't start, if they couldn't
 	e2eeErr   error
 	fetchOnce sync.Once
@@ -738,11 +739,22 @@ func (c *Conn) trackFailure(sender waTypes.JID, msgID string) {
 	}
 }
 
-// decryptedFrom clears the failure count once a device's message works.
+// decryptedFrom clears the failure count once a device's message works,
+// and logs the first success per device per run (device only, no content),
+// so the log shows which of someone's devices work and which don't.
 func (c *Conn) decryptedFrom(sender waTypes.JID) {
+	addr := sender.SignalAddress().String()
 	c.mu.Lock()
-	delete(c.failed, sender.SignalAddress().String())
+	delete(c.failed, addr)
+	if c.okDevices == nil {
+		c.okDevices = map[string]bool{}
+	}
+	first := !c.okDevices[addr]
+	c.okDevices[addr] = true
 	c.mu.Unlock()
+	if first {
+		c.log.Warn().Str("device", addr).Msg("decrypted a message from this device")
+	}
 }
 
 // resetSession drops our stored session with a sender's device after a
