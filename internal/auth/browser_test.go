@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -53,4 +54,27 @@ func TestBrowserWindowMechanics(t *testing.T) {
 		t.Fatal("read no facebook.com cookies")
 	}
 	t.Logf("read facebook.com cookies from the window: %v (not logged in, as expected)", names)
+}
+
+func TestRemoveStaleProfiles(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir())
+	old, fresh := filepath.Join(os.TempDir(), "tuon-login-1"), filepath.Join(os.TempDir(), "tuon-login-2")
+	other := filepath.Join(os.TempDir(), "something-else")
+	for _, d := range []string{old, fresh, other} {
+		if err := os.MkdirAll(filepath.Join(d, "Default"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	past := time.Now().Add(-time.Hour)
+	_ = os.Chtimes(old, past, past)
+	_ = os.Chtimes(other, past, past)
+	removeStaleProfiles()
+	if _, err := os.Stat(old); !os.IsNotExist(err) {
+		t.Error("stale profile kept")
+	}
+	for _, d := range []string{fresh, other} {
+		if _, err := os.Stat(d); err != nil {
+			t.Errorf("%s removed", d)
+		}
+	}
 }

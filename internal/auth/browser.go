@@ -58,8 +58,21 @@ func FindBrowser() string {
 	return ""
 }
 
+// removeStaleProfiles deletes login profiles an interrupted login left
+// behind (tuon killed before it could clean up). Only one login runs at a
+// time, so anything older than a few minutes is stale.
+func removeStaleProfiles() {
+	old, _ := filepath.Glob(filepath.Join(os.TempDir(), "tuon-login-*"))
+	for _, p := range old {
+		if st, err := os.Stat(p); err == nil && time.Since(st.ModTime()) > 10*time.Minute {
+			_ = os.RemoveAll(p)
+		}
+	}
+}
+
 // BrowserLogin opens the login window and waits until you've logged in.
 func BrowserLogin(ctx context.Context, browser string) (Creds, error) {
+	removeStaleProfiles()
 	profile, err := os.MkdirTemp("", "tuon-login-")
 	if err != nil {
 		return Creds{}, err
