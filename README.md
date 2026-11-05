@@ -192,7 +192,7 @@ Everything in `~/.config/tuon` is readable only by you.
 ## Development
 
 ```sh
-go build -trimpath -ldflags "-s -w -buildid=" -o bin/tuon ./cmd/tuon   # build (same flags as releases)
+CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags "-s -w -buildid=" -o bin/tuon ./cmd/tuon   # build (same flags as releases)
 ./scripts/check.sh            # checksums, build, vet, tests, known vulnerabilities: run before every push
 ./scripts/deps-review.sh      # after changing a dependency (see DEPENDENCIES.md)
 ./scripts/release.sh v1.2.3   # build a signed tag for every platform, with SHA256SUMS

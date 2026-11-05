@@ -24,7 +24,8 @@ var releaseRepo = "https://github.com/ralphlagumen/tuon.git"
 // release builds stay reproducible.
 var version = "dev"
 
-// releaseLDFlags: the same flags as install.sh and scripts/release.sh.
+// releaseLDFlags: the same flags as install.sh and scripts/release.sh
+// (which also build with CGO_ENABLED=0 and -buildvcs=false).
 func releaseLDFlags(tag string) string { return "-s -w -buildid= -X main.version=" + tag }
 
 //go:embed release_signers
@@ -118,7 +119,7 @@ func update() error {
 
 	fmt.Println("  Building…")
 	tmp := exe + ".new"
-	build := goCmd(src, "build", "-trimpath", "-ldflags", releaseLDFlags(tag), "-o", tmp, "./cmd/tuon")
+	build := goCmd(src, "build", "-trimpath", "-buildvcs=false", "-ldflags", releaseLDFlags(tag), "-o", tmp, "./cmd/tuon")
 	if out, err := build.CombinedOutput(); err != nil {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("build failed:\n%s", indent(strings.TrimSpace(string(out))))
@@ -271,9 +272,11 @@ func safeGitEnv() []string {
 func goCmd(dir string, args ...string) *exec.Cmd {
 	cmd := exec.Command("go", args...)
 	cmd.Dir = dir
-	env := []string{"GOWORK=off", "GOFLAGS=-mod=readonly"}
+	// the same settings as scripts/release.sh, so the result matches the
+	// published SHA256SUMS
+	env := []string{"GOWORK=off", "GOFLAGS=-mod=readonly", "CGO_ENABLED=0"}
 	for _, kv := range os.Environ() {
-		if strings.HasPrefix(kv, "GOWORK=") || strings.HasPrefix(kv, "GOFLAGS=") {
+		if strings.HasPrefix(kv, "GOWORK=") || strings.HasPrefix(kv, "GOFLAGS=") || strings.HasPrefix(kv, "CGO_ENABLED=") {
 			continue
 		}
 		env = append(env, kv)

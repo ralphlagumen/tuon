@@ -17,7 +17,7 @@ say "Building tuon…"
 mkdir -p bin
 # the same flags as releases; the version is the signed tag checked out, if any
 VERSION=$(git describe --tags --exact-match --match 'v*' 2>/dev/null || echo dev)
-go build -trimpath -ldflags "-s -w -buildid= -X main.version=$VERSION" -o bin/tuon ./cmd/tuon
+CGO_ENABLED=0 GOWORK=off go build -trimpath -buildvcs=false -ldflags "-s -w -buildid= -X main.version=$VERSION" -o bin/tuon ./cmd/tuon
 rm -f "$HOME/.config/tuon/source" # older versions kept the clone's path here; updates no longer use it
 
 if [ "$(uname)" = "Darwin" ] && [ ! -d /Applications/Ghostty.app ] && [ ! -d "$HOME/Applications/Ghostty.app" ]; then
