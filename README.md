@@ -49,7 +49,7 @@ cd tuon
 
 This builds `tuon` and its small Touch ID helper (`tuon-keyhelper`, which needs Apple's command line tools: `xcode-select --install`) into `~/.local/bin`, installs [Ghostty](https://ghostty.org) (the terminal that shows real photos) if you don't have it, then runs `tuon setup`.
 
-**Updating:** run `tuon update`. It installs the newest release tag signed by tuon's maintainer and skips anything unsigned, shows what changed, and asks before building if the update changes tuon's dependencies. Restart tuon afterwards if it was open.
+**Updating:** run `tuon update`. It downloads tuon fresh from GitHub into a temporary folder, installs the newest release tag signed by tuon's maintainer and skips anything unsigned, shows what changed, and asks before building if the update changes tuon's dependencies. Restart tuon afterwards if it was open.
 
 **Linux:** `./install.sh` works the same, minus Ghostty. For photos, use kitty, Ghostty or WezTerm. For copy and paste, install `wl-clipboard` (Wayland) or `xclip` (X11).
 
@@ -187,7 +187,6 @@ The **connector** speaks Messenger's protocol through [mautrix-meta](https://git
 | `~/.config/tuon/keys.db` | Keys for encrypted chats, encrypted page by page |
 | `~/.config/tuon/tuon.log` | Warnings and errors; starts over past 5 MB |
 | `~/.config/tuon/cache/img/` | Photo cache for Ghostty, kitty and WezTerm; photos unused for 2 weeks are removed, capped at 100 MB |
-| `~/.config/tuon/source` | Where your tuon clone is, for `tuon update` |
 
 Everything in `~/.config/tuon` is readable only by you.
 

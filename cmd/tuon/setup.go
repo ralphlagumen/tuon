@@ -239,13 +239,8 @@ func logout(wipe bool) error {
 		return nil
 	}
 	cleanTemp()
-	// keep only where the source clone is (for `tuon update`): not personal data
-	src, _ := os.ReadFile(filepath.Join(store.Dir(), "source"))
 	if err := os.RemoveAll(store.Dir()); err != nil {
 		return err
-	}
-	if len(src) > 0 && os.MkdirAll(store.Dir(), 0o700) == nil {
-		_ = os.WriteFile(filepath.Join(store.Dir(), "source"), src, 0o600)
 	}
 	fmt.Println("  Deleted.")
 	return nil

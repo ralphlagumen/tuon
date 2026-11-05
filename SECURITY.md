@@ -54,12 +54,12 @@ Everything shown in Tuon (names, messages, link titles, reactions, even error te
 Tuon builds on code from other people (mautrix-meta, whatsmeow and about 140 other modules). That code runs with your rights, so:
 
 - **Every dependency is pinned by checksum** (`go.sum`, checked against Go's public checksum database). A published version can't be swapped silently.
-- **`tuon update` installs only signed releases.** It takes the newest version tag signed with the maintainer's key (built into tuon) and skips, by name, any tag that isn't. Someone who takes over the GitHub repo or account can push code, but can't sign it (they could block later updates, not install their own). Known gap: `tuon update` trusts the source folder recorded in `~/.config/tuon/source` and that folder's git settings; a fix is planned.
+- **`tuon update` installs only signed releases.** It takes the newest version tag signed with the maintainer's key (built into tuon) and skips, by name, any tag that isn't. Someone who takes over the GitHub repo or account can push code, but can't sign it (they could block later updates, not install their own). It downloads a fresh copy into a temporary folder each time, with git's local settings and hooks ignored, so nothing on your computer can steer it, and builds exactly the signed files. A tag signed under a different name is skipped too.
 - **It shows what changed before building.** If an update changes dependencies, it lists them and needs you to type `yes`. A checksum change without a matching dependency change is refused. Modules are re-verified (`go mod verify`) before the build.
 - **Dependency updates are reviewed by hand.** [DEPENDENCIES.md](DEPENDENCIES.md) lists the modules that touch the network, your session or encryption, with the version last reviewed, and `./scripts/deps-review.sh` flags changes to them.
 - **Builds are reproducible.** The same tag built with the same Go version gives the same file, so anyone can compare against the published `SHA256SUMS`.
 - **Checks before every release:** `./scripts/check.sh` verifies checksums, builds, tests and scans for known vulnerabilities (govulncheck). Tuon requires Go 1.27.3, which fixes a certificate-checking flaw in 1.27.2.
-- **The repository** requires signed commits and pull requests on `master`, with no bypass.
+- **The repository** requires signed commits and linear history on `master`, with no force-push and no bypass.
 
 ## If your laptop is stolen, or you think your session leaked
 
