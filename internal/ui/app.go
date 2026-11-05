@@ -228,7 +228,7 @@ func New(ctx context.Context, st *store.Store, conn connector.Connector, platfor
 		status:     "connecting…",
 	}
 	if kittyMode {
-		m.kitty = newKittyImages(os.Stdout, filepath.Join(store.Dir(), "cache", "img"))
+		m.kitty = newKittyImages(os.Stdout)
 	}
 	m.reloadChats()
 	return m
@@ -1224,7 +1224,23 @@ func keptMentions(text string, ms []connector.Mention) []connector.Mention {
 	return out
 }
 
+// shortCommands: one letter for each command (":l" locks, ":s off" turns
+// the sound off).
+var shortCommands = map[string]string{
+	"l": "lock", "s": "sound", "m": "mute", "i": "images", "p": "previews", "h": "help",
+}
+
+// expandCommand turns a shortcut into its command, keeping "on"/"off".
+func expandCommand(cmd string) string {
+	word, rest, _ := strings.Cut(cmd, " ")
+	if long, ok := shortCommands[word]; ok {
+		return strings.TrimSpace(long + " " + rest)
+	}
+	return cmd
+}
+
 func (m Model) runCommand(cmd string) (tea.Model, tea.Cmd) {
+	cmd = expandCommand(strings.TrimSpace(cmd))
 	switch cmd {
 	case "q", "quit":
 		return m, tea.Quit

@@ -689,7 +689,7 @@ func TestPhotoAlbum(t *testing.T) {
 	}
 
 	// in a terminal that draws photos, the full view flips through the album only
-	m.kitty = newKittyImages(io.Discard, t.TempDir())
+	m.kitty = newKittyImages(io.Discard)
 	m.focus, m.selecting = focusChat, true
 	m.selectIndex(1) // p1
 	m = key(m, "o")
@@ -1563,5 +1563,16 @@ func TestPlaceholderGiveUpAndRemove(t *testing.T) {
 	}
 	if c, _ := st.Chat("j"); c.Snippet != "hello" {
 		t.Fatalf("preview = %q, want the newest real message", c.Snippet)
+	}
+}
+
+func TestExpandCommand(t *testing.T) {
+	for in, want := range map[string]string{
+		"l": "lock", "s": "sound", "s off": "sound off", "i on": "images on", "p off": "previews off",
+		"m": "mute", "h": "help", "q": "q", "lock": "lock", "sound on": "sound on", "x": "x",
+	} {
+		if got := expandCommand(in); got != want {
+			t.Errorf("expandCommand(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

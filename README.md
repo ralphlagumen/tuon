@@ -124,7 +124,7 @@ With a message selected:
 
 Attached files appear in your text as `[Image #1]` or `[File #2]`. Delete the token to drop the file. Your message shows right away as "sending…", and as "not sent" if Messenger hasn't confirmed it after 45 seconds. If sending fails, your text (and any files not sent) go back in the box.
 
-Type `:` in the chat list for commands: `:mute`, `:sound` (pick the new-message sound and volume), `:images off`, `:previews off` (no message text in the chat list, for when someone can see your screen), `:lock` (tuon also locks after 10 minutes idle), `:quit`.
+Type `:` in the chat list for commands, or just their first letter: `:mute` (`:m`), `:sound` (`:s`: pick the new-message sound and volume; `:s off` turns it off), `:images off` (`:i off`), `:previews off` (`:p off`: no message text in the chat list, for when someone can see your screen), `:lock` (`:l`; tuon also locks after 10 minutes idle), `:help` (`:h`), `:quit` (`:q`).
 
 From your shell:
 
@@ -186,7 +186,6 @@ The **connector** speaks Messenger's protocol through [mautrix-meta](https://git
 | `~/.config/tuon/tuon.db` | Chats, folders, the newest 1,000 messages per chat; message text, previews, drafts and backup keys encrypted |
 | `~/.config/tuon/keys.db` | Keys for encrypted chats, encrypted page by page |
 | `~/.config/tuon/tuon.log` | Warnings and errors; starts over past 5 MB |
-| `~/.config/tuon/cache/img/` | Photo cache for Ghostty, kitty and WezTerm; photos unused for 2 weeks are removed, capped at 100 MB |
 
 Everything in `~/.config/tuon` is readable only by you.
 

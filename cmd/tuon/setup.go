@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -276,42 +275,9 @@ func privateFiles() {
 // cleanTemp deletes photos written for the system viewer.
 func cleanTemp() { _ = os.RemoveAll(filepath.Join(os.TempDir(), "tuon")) }
 
-// trimPhotoCache deletes cached photos not used for two weeks, and the
-// oldest ones if the cache passes 100 MB.
-func trimPhotoCache(dir string) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return
-	}
-	type f struct {
-		path string
-		mod  time.Time
-		size int64
-	}
-	var files []f
-	var total int64
-	for _, e := range entries {
-		info, err := e.Info()
-		if err != nil || e.IsDir() {
-			continue
-		}
-		p := filepath.Join(dir, e.Name())
-		if time.Since(info.ModTime()) > 14*24*time.Hour {
-			_ = os.Remove(p)
-			continue
-		}
-		files = append(files, f{p, info.ModTime(), info.Size()})
-		total += info.Size()
-	}
-	sort.Slice(files, func(i, j int) bool { return files[i].mod.Before(files[j].mod) })
-	for _, x := range files {
-		if total <= 100<<20 {
-			break
-		}
-		_ = os.Remove(x.path)
-		total -= x.size
-	}
-}
+// removePhotoCache deletes the photo cache older versions kept as plain
+// PNGs: photos now go to the terminal without touching the disk.
+func removePhotoCache() { _ = os.RemoveAll(filepath.Join(store.Dir(), "cache", "img")) }
 
 // trimLog keeps the log from growing forever: past 5 MB, start fresh.
 func trimLog(path string) {

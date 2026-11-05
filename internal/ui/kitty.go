@@ -1,15 +1,13 @@
 package ui
 
 import (
-	"crypto/sha1"
+	"bytes"
 	"encoding/base64"
-	"encoding/hex"
 	"fmt"
 	"image"
 	"image/png"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 
 	termimg "github.com/blacktop/go-termimg"
@@ -20,7 +18,8 @@ import (
 // (Ghostty, kitty, WezTerm). Elsewhere photos are View photo buttons.
 //
 // How it fits a full-screen TUI: the photo is sent to the terminal once as
-// a PNG file path (tiny message), with a "virtual placement" of N x M cells.
+// PNG data in the escape sequence (never a file on disk), with a "virtual
+// placement" of N x M cells.
 // The screen then contains placeholder characters (U+10EEEE) colored with
 // the image ID. The terminal draws the photo wherever those characters are,
 // so photos scroll and redraw like ordinary text.
@@ -52,14 +51,14 @@ func detectKitty() bool {
 
 type kittyImages struct {
 	out  io.Writer
-	dir  string
 	next uint32
 	ids  map[string]uint32 // ref|cols|rows -> image ID
-	pngs map[string]string // ref -> cached PNG path
 }
 
-func newKittyImages(out io.Writer, dir string) *kittyImages {
-	return &kittyImages{out: out, dir: dir, next: 1, ids: map[string]uint32{}, pngs: map[string]string{}}
+// newKittyImages: photos go to the terminal as data inside the escape
+// sequence, never through a file, so no readable copy lands on disk.
+func newKittyImages(out io.Writer) *kittyImages {
+	return &kittyImages{out: out, next: 1, ids: map[string]uint32{}}
 }
 
 // place makes sure the photo is sent and placed at cols x rows cells, and
@@ -71,16 +70,16 @@ func (k *kittyImages) place(ref string, img image.Image, cols, rows int) ([]stri
 	key := fmt.Sprintf("%s|%d|%d", ref, cols, rows)
 	id, ok := k.ids[key]
 	if !ok {
-		path, err := k.pngFor(ref, img)
+		data, err := kittyPNG(img)
 		if err != nil {
 			return nil, err
 		}
 		id = k.next
 		k.next++
-		// transmit by file path, then a virtual placement of cols x rows
-		seq := fmt.Sprintf("\x1b_Ga=t,f=100,t=f,i=%d,q=2;%s\x1b\\", id, base64.StdEncoding.EncodeToString([]byte(path))) +
-			fmt.Sprintf("\x1b_Ga=p,U=1,i=%d,c=%d,r=%d,q=2\x1b\\", id, cols, rows)
-		if _, err := io.WriteString(k.out, seq); err != nil {
+		var b strings.Builder
+		writeKittyData(&b, id, data)
+		fmt.Fprintf(&b, "\x1b_Ga=p,U=1,i=%d,c=%d,r=%d,q=2\x1b\\", id, cols, rows) // virtual placement
+		if _, err := io.WriteString(k.out, b.String()); err != nil {
 			return nil, err
 		}
 		k.ids[key] = id
@@ -88,36 +87,40 @@ func (k *kittyImages) place(ref string, img image.Image, cols, rows int) ([]stri
 	return placeholderLines(id, cols, rows), nil
 }
 
-// pngFor writes a downsized PNG of the photo once and returns its path.
-func (k *kittyImages) pngFor(ref string, img image.Image) (string, error) {
-	if p, ok := k.pngs[ref]; ok {
-		return p, nil
+// kittyPNG: a downsized PNG of the photo, in memory.
+func kittyPNG(img image.Image) ([]byte, error) {
+	b := img.Bounds()
+	w, h := b.Dx(), b.Dy()
+	if s := max(w, h); s > kittyMaxSide {
+		w, h = w*kittyMaxSide/s, h*kittyMaxSide/s
 	}
-	if err := os.MkdirAll(k.dir, 0o700); err != nil {
-		return "", err
+	dst := image.NewRGBA(image.Rect(0, 0, max(1, w), max(1, h)))
+	draw.CatmullRom.Scale(dst, dst.Bounds(), img, b, draw.Src, nil)
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, dst); err != nil {
+		return nil, err
 	}
-	sum := sha1.Sum([]byte(ref))
-	path := filepath.Join(k.dir, hex.EncodeToString(sum[:8])+".png")
-	if _, err := os.Stat(path); err != nil {
-		b := img.Bounds()
-		w, h := b.Dx(), b.Dy()
-		if s := max(w, h); s > kittyMaxSide {
-			w, h = w*kittyMaxSide/s, h*kittyMaxSide/s
+	return buf.Bytes(), nil
+}
+
+// writeKittyData transmits PNG data directly (t=d), in the 4096-byte
+// base64 chunks the protocol requires.
+func writeKittyData(b *strings.Builder, id uint32, data []byte) {
+	enc := base64.StdEncoding.EncodeToString(data)
+	for first := true; first || enc != ""; first = false {
+		n := min(4096, len(enc))
+		chunk := enc[:n]
+		enc = enc[n:]
+		more := 0
+		if enc != "" {
+			more = 1
 		}
-		dst := image.NewRGBA(image.Rect(0, 0, max(1, w), max(1, h)))
-		draw.CatmullRom.Scale(dst, dst.Bounds(), img, b, draw.Src, nil)
-		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
-		if err != nil {
-			return "", err
-		}
-		err = png.Encode(f, dst)
-		f.Close()
-		if err != nil {
-			return "", err
+		if first {
+			fmt.Fprintf(b, "\x1b_Ga=t,f=100,t=d,i=%d,q=2,m=%d;%s\x1b\\", id, more, chunk)
+		} else {
+			fmt.Fprintf(b, "\x1b_Gm=%d;%s\x1b\\", more, chunk)
 		}
 	}
-	k.pngs[ref] = path
-	return path, nil
 }
 
 // clearAll removes our photos from the terminal's memory (on quit).

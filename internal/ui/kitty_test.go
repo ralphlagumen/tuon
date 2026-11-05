@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/base64"
 	"image"
-	"os"
 	"strings"
 	"testing"
 
@@ -30,25 +29,36 @@ func TestKittyPlaceholdersAreExactWidth(t *testing.T) {
 
 func TestKittySendsOnce(t *testing.T) {
 	var out bytes.Buffer
-	k := newKittyImages(&out, t.TempDir())
+	k := newKittyImages(&out)
 	img := image.NewRGBA(image.Rect(0, 0, 3000, 2000))
 
 	if _, err := k.place("ref1", img, 40, 13); err != nil {
 		t.Fatal(err)
 	}
 	first := out.String()
-	if !strings.Contains(first, "a=t,f=100,t=f,i=1") || !strings.Contains(first, "a=p,U=1,i=1,c=40,r=13") {
+	if !strings.Contains(first, "a=t,f=100,t=d,i=1") || !strings.Contains(first, "a=p,U=1,i=1,c=40,r=13") {
 		t.Fatalf("transmit/placement missing: %q", first)
 	}
-	// the path in the message points at a real, downsized PNG
-	b64 := first[strings.Index(first, ";")+1 : strings.Index(first, "\x1b\\")]
-	path, _ := base64.StdEncoding.DecodeString(b64)
-	f, err := os.Open(string(path))
+	// the photo travels as chunked data (no file): reassemble and decode it
+	var b64 strings.Builder
+	for _, seq := range strings.Split(first, "\x1b\\") {
+		if !strings.HasPrefix(seq, "\x1b_G") || strings.Contains(seq, "a=p") {
+			continue
+		}
+		chunk := seq[strings.Index(seq, ";")+1:]
+		if len(chunk) > 4096 {
+			t.Fatalf("chunk of %d bytes, protocol limit is 4096", len(chunk))
+		}
+		b64.WriteString(chunk)
+	}
+	if !strings.Contains(first, "m=0;") {
+		t.Fatal("no final chunk (m=0)")
+	}
+	data, err := base64.StdEncoding.DecodeString(b64.String())
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg, _, err := image.DecodeConfig(f)
-	f.Close()
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil || cfg.Width != kittyMaxSide {
 		t.Fatalf("png %v width %d, want %d", err, cfg.Width, kittyMaxSide)
 	}
@@ -65,7 +75,7 @@ func TestKittySendsOnce(t *testing.T) {
 func TestKittyChatView(t *testing.T) {
 	m, _, _ := newTestModel(t, 120, 40)
 	var out bytes.Buffer
-	m.kitty = newKittyImages(&out, t.TempDir())
+	m.kitty = newKittyImages(&out)
 	m = seed(m)
 	m = key(m, "3")
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})

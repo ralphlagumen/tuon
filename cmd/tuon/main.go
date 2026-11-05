@@ -135,7 +135,7 @@ func run() error {
 	}
 	_ = st.Prune(ui.KeepMessages)
 	_, _ = st.Compact()
-	trimPhotoCache(filepath.Join(store.Dir(), "cache", "img"))
+	removePhotoCache()
 
 	// Logs go to a file so they never draw over the UI.
 	logPath := filepath.Join(store.Dir(), "tuon.log")
