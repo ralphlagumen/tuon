@@ -81,7 +81,9 @@ type Conn struct {
 	resetAt map[string]time.Time
 	// failed: per sender device, the distinct messages that failed to
 	// decrypt since the last one that worked (see trackFailure)
-	failed    map[string]map[string]bool
+	failed map[string]map[string]bool
+	// e2eeErr: why encrypted chats couldn't start, if they couldn't
+	e2eeErr   error
 	fetchOnce sync.Once
 	// threadsSeen counts distinct chats received (known holds their keys),
 	// so paging can tell when a page brought nothing new
@@ -114,14 +116,20 @@ func (c *Conn) SetSealer(s Sealer) { c.seal = s }
 func (c *Conn) WaitEncrypted(ctx context.Context) error {
 	for {
 		c.mu.Lock()
-		wa := c.wa
+		wa, why := c.wa, c.e2eeErr
 		c.mu.Unlock()
 		if wa != nil && wa.IsConnected() {
 			return nil
 		}
+		if why != nil {
+			return fmt.Errorf("encrypted chats couldn't start: %w", why)
+		}
 		select {
 		case <-ctx.Done():
-			return errors.New("encrypted chats didn't connect")
+			if wa == nil {
+				return errors.New("encrypted chats didn't start (no answer from Messenger's encrypted service)")
+			}
+			return errors.New("encrypted chats started but couldn't connect: check your network, or run `tuon relink` if this keeps happening")
 		case <-time.After(300 * time.Millisecond):
 		}
 	}
@@ -156,6 +164,11 @@ func (c *Conn) emit(evt any) {
 func (c *Conn) status(text string, err error) {
 	if err != nil { // error text can carry server-provided strings
 		err = errors.New(connector.SafeText(err.Error(), false))
+		if text == "encrypted chats off" { // kept, so WaitEncrypted can say why
+			c.mu.Lock()
+			c.e2eeErr = err
+			c.mu.Unlock()
+		}
 	}
 	c.emit(connector.StatusEvent{Text: text, Err: err})
 }
