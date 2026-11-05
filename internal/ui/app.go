@@ -377,6 +377,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.scheduleRefill(msg.chatID, msg.attempt+1)
 		}
 		delete(m.refilling, msg.chatID)
+		if m.st.HasMissing(msg.chatID) { // the backup never had them
+			_ = m.st.GiveUpMissing(msg.chatID)
+			m.reloadChats()
+			return m, m.reloadMessages()
+		}
 		return m, nil
 
 	case newestDoneMsg:
@@ -668,6 +673,11 @@ func (m *Model) relink(ref string, err error) tea.Cmd {
 		}
 	}
 	return nil
+}
+
+// isPlaceholder: a "loading" / "couldn't load" line, not a real message.
+func isPlaceholder(msg store.MessageRow) bool {
+	return len(msg.Media) == 1 && (msg.Media[0].Kind == connector.Missing || msg.Media[0].Kind == connector.Unavailable)
 }
 
 // notSent: a message of yours Messenger never confirmed.
@@ -1700,8 +1710,8 @@ func (m Model) onSelectKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if sel >= 0 && sel < len(m.msgs) {
 			m.reacting = true
 		}
-	case "d", "x", "backspace", "delete": // drop a message that didn't send
-		if sel >= 0 && sel < len(m.msgs) && m.notSent(m.msgs[sel]) {
+	case "d", "x", "backspace", "delete": // drop a message that didn't send, or a placeholder
+		if sel >= 0 && sel < len(m.msgs) && (m.notSent(m.msgs[sel]) || isPlaceholder(m.msgs[sel])) {
 			_ = m.st.RemoveMessage(m.msgs[sel].ID)
 			cmd := m.reloadMessages()
 			m.reloadChats()

@@ -1535,3 +1535,33 @@ func TestReactionFromBackupReplacesPlaceholder(t *testing.T) {
 		t.Fatalf("preview still %q, missing=%v", c.Snippet, st.HasMissing("j"))
 	}
 }
+
+func TestPlaceholderGiveUpAndRemove(t *testing.T) {
+	m, st, _ := newTestModel(t, 140, 30)
+	now := time.Now()
+	_ = st.UpsertChat(connector.Chat{ID: "j", Name: "Jayson", LastActivity: now, Encrypted: true})
+	_, _ = st.AddMessage(connector.Message{ID: "real", ChatID: "j", SenderID: "2", Text: "hello", Time: now.Add(-time.Minute)}, false)
+	_, _ = st.AddMessage(connector.Message{ID: "ph", ChatID: "j", SenderID: "2", Time: now,
+		Media: []connector.Media{{Kind: connector.Missing}}}, false)
+	m.reloadChats()
+	c, _ := st.Chat("j")
+	m = run(m, m.openChat(c))
+	// the backup checks ran out
+	next, cmd := m.Update(refillDoneMsg{chatID: "j", attempt: maxRefills - 1})
+	m = run(next.(Model), cmd)
+	if s := screen(m); !strings.Contains(s, "Couldn't load this message") || strings.Contains(s, "loading from your backup") {
+		t.Fatalf("not given up:\n%s", s)
+	}
+	if st.HasMissing("j") {
+		t.Fatal("still counted as waiting")
+	}
+	m = key(m, "up") // select it, d removes it
+	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	m = run(next.(Model), cmd)
+	if strings.Contains(screen(m), "Couldn't load") {
+		t.Fatal("d didn't remove the line")
+	}
+	if c, _ := st.Chat("j"); c.Snippet != "hello" {
+		t.Fatalf("preview = %q, want the newest real message", c.Snippet)
+	}
+}

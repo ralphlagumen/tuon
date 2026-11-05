@@ -193,6 +193,8 @@ func (m Model) footer() string {
 		return keyHints("enter", "send", "alt+enter", "new line", "@", "tag", "@~/", "attach", "ctrl+v", "paste image", "ctrl+o", "newest photo", "↑", "pick message", "esc", "chats")
 	case m.reacting:
 		return keyHints("1-6", "react", "x", "remove mine", "esc", "cancel")
+	case m.focus == focusChat && m.selecting && m.selIndex() >= 0 && m.selIndex() < len(m.msgs) && isPlaceholder(m.msgs[m.selIndex()]):
+		return keyHints("d", "remove this line", "↑↓", "pick", "esc", "back to typing")
 	case m.focus == focusChat && m.selecting && m.selIndex() >= 0 && m.selIndex() < len(m.msgs) && m.notSent(m.msgs[m.selIndex()]):
 		return keyHints("enter", "send again", "d", "delete", "↑↓", "pick", "esc", "back to typing")
 	case m.focus == focusChat && m.selecting:
@@ -1038,6 +1040,8 @@ func mediaLabel(k connector.MediaKind) string {
 		return "Link"
 	case connector.Missing:
 		return "New message, loading from your backup…"
+	case connector.Unavailable:
+		return "Couldn't load this message. See it on your phone (d removes this line)."
 	default:
 		return "File"
 	}

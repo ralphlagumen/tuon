@@ -29,6 +29,8 @@ const (
 	// Missing: an encrypted message arrived but couldn't be decrypted. It is
 	// a placeholder that the real message (same ID) replaces when it loads.
 	Missing MediaKind = "missing"
+	// Unavailable: a Missing message the backup never had; see it on the phone.
+	Unavailable MediaKind = "unavailable"
 )
 
 // MissingSnippet is the chat-list line for a message still being fetched.

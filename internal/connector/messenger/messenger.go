@@ -685,12 +685,18 @@ func (c *Conn) noteEncrypted(chat waTypes.JID) table.ThreadType {
 // Show a placeholder instead of dropping it; the real message (same ID)
 // replaces it if a retry works or the PIN backup has it.
 func (c *Conn) onUndecryptable(evt *events.UndecryptableMessage) {
+	// what kind of item failed (never its content), to tell reactions apart
+	c.log.Warn().Str("device", evt.Info.Sender.SignalAddress().String()).Str("type", evt.Info.Type).
+		Str("media_type", evt.Info.MediaType).Str("fail_mode", string(evt.DecryptFailMode)).Msg("couldn't decrypt an item")
+	reaction := evt.Info.Type == "reaction" || evt.Info.MediaType == "reaction"
 	if !evt.IsUnavailable {
 		c.resetSession(evt.Info.Sender)
-		c.trackFailure(evt.Info.Sender, evt.Info.ID)
+		if !reaction { // a missed reaction isn't worth a warning
+			c.trackFailure(evt.Info.Sender, evt.Info.ID)
+		}
 	}
-	if evt.DecryptFailMode == events.DecryptFailHide {
-		return // reactions, receipts and the like: nothing to show
+	if evt.DecryptFailMode == events.DecryptFailHide || reaction {
+		return // reactions, receipts and the like: no "loading" line for them
 	}
 	chat := evt.Info.Chat
 	tt := c.noteEncrypted(chat)

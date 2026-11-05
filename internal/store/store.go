@@ -312,6 +312,17 @@ func (s *Store) HasMissing(chatID string) bool {
 	return n > 0
 }
 
+// GiveUpMissing turns a chat's "loading" placeholders into "couldn't load"
+// once the backup checks are over: they'll never fill.
+func (s *Store) GiveUpMissing(chatID string) error {
+	b, _ := json.Marshal([]connector.Media{{Kind: connector.Unavailable}})
+	if _, err := s.DB.Exec(`UPDATE tuon_messages SET missing = 2, media = ? WHERE chat_id = ? AND missing = 1`, s.enc(string(b)), chatID); err != nil {
+		return err
+	}
+	s.refreshSnippet(chatID)
+	return nil
+}
+
 // MissingChats lists chats that still have placeholders.
 func (s *Store) MissingChats() []string {
 	rows, err := s.DB.Query(`SELECT DISTINCT chat_id FROM tuon_messages WHERE missing = 1`)
@@ -479,7 +490,7 @@ func (s *Store) MarkRead(chatID string) error {
 func (s *Store) RemoveMessage(id string) error {
 	var chatID string
 	var missing bool
-	_ = s.DB.QueryRow(`SELECT chat_id, missing FROM tuon_messages WHERE id = ?`, id).Scan(&chatID, &missing)
+	_ = s.DB.QueryRow(`SELECT chat_id, missing <> 0 FROM tuon_messages WHERE id = ?`, id).Scan(&chatID, &missing)
 	if _, err := s.DB.Exec(`DELETE FROM tuon_messages WHERE id = ?`, id); err != nil {
 		return err
 	}
