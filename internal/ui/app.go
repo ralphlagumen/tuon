@@ -125,6 +125,7 @@ type Model struct {
 	imgs      map[string]image.Image
 	pending   map[string]bool
 	failed    map[string]string // ref -> error, so we don't retry forever
+	relinked  map[string]bool   // expired photo links we already asked Messenger to renew
 	imgIdx    int               // in image view: index into chatImages()
 	recent    []string          // photo refs, oldest first (for letting old ones go)
 	kitty     *kittyImages      // real photos (Ghostty/kitty); nil = View photo buttons
@@ -171,6 +172,7 @@ type (
 	newestDoneMsg struct{ err error }
 	pendingCheck  struct{}
 	pruneMsg      struct{}
+	relinkedMsg   struct{ chatID, msgID string }
 	refillMsg     struct {
 		chatID  string
 		attempt int
@@ -296,6 +298,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		delete(m.pending, msg.ref)
 		if msg.err != nil {
 			m.failed[msg.ref] = msg.err.Error()
+			if cmd := m.relink(msg.ref, msg.err); cmd != nil {
+				return m, cmd
+			}
 		} else {
 			m.raw[msg.ref] = msg.raw
 			if msg.img != nil {
@@ -318,6 +323,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.flash("Not sent: " + sendError(msg.err) + ". Your message is back in the box.")
 		}
 		return m, m.flash("Not sent: " + sendError(msg.err))
+
+	case relinkedMsg:
+		// the chat's messages came back with fresh links: retry that photo
+		cmd := m.reloadMessages()
+		if m.chat == nil || m.chat.ID != msg.chatID {
+			return m, cmd
+		}
+		for _, x := range m.msgs {
+			if x.ID == msg.msgID && len(m.albumWait) > 0 {
+				m.albumWait = nil
+				for _, md := range x.Media {
+					if md.Kind == connector.Photo && md.Ref != "" {
+						return m, tea.Batch(cmd, m.openPhoto(md))
+					}
+				}
+			}
+		}
+		return m, cmd
 
 	case pruneMsg:
 		_ = m.st.Prune(KeepMessages)
@@ -446,6 +469,14 @@ func (m *Model) applyEvents(evts []any) tea.Cmd {
 			_ = m.st.UpsertContact(e.ID, e.Name)
 		case connector.ChatAliasEvent:
 			_ = m.st.Merge(e.From, e.To)
+			if d, ok := m.drafts[e.From]; ok { // an unsent draft follows its chat
+				to := m.st.Resolve(e.To)
+				if m.drafts[to] == "" {
+					m.drafts[to], m.draftAtts[to] = d, m.draftAtts[e.From]
+				}
+				delete(m.drafts, e.From)
+				delete(m.draftAtts, e.From)
+			}
 		case connector.ChatEvent:
 			e.Chat.ID = m.st.Resolve(e.Chat.ID)
 			if e.Chat.ID == openID {
@@ -553,6 +584,37 @@ func (m *Model) reloadMessages() tea.Cmd {
 		}
 	}
 	return tea.Batch(append(cmds, lookup)...)
+}
+
+// relink: plain-chat photo links expire after about a month. When one
+// does, ask Messenger for that stretch of the chat again: the messages come
+// back with fresh links. Once per photo.
+func (m *Model) relink(ref string, err error) tea.Cmd {
+	e := err.Error()
+	if m.chat == nil || m.chat.Encrypted || m.relinked[ref] ||
+		!(strings.Contains(e, "HTTP 403") || strings.Contains(e, "HTTP 410") || strings.Contains(e, "expired")) {
+		return nil
+	}
+	for _, x := range m.msgs {
+		for _, md := range x.Media {
+			if md.Ref != ref {
+				continue
+			}
+			if m.relinked == nil {
+				m.relinked = map[string]bool{}
+			}
+			m.relinked[ref] = true
+			conn, ctx, chat, msgID, at := m.conn, m.ctx, m.chat.Chat, x.ID, x.Time
+			return func() tea.Msg {
+				conn.KnowChat(chat)
+				ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+				defer cancel()
+				_ = conn.LoadOlder(ctx, chat.ID, at.Add(time.Second), "")
+				return relinkedMsg{chat.ID, msgID}
+			}
+		}
+	}
+	return nil
 }
 
 // notSent: a message of yours Messenger never confirmed.

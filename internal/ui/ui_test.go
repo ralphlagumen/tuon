@@ -29,22 +29,28 @@ type sent struct {
 type reacted struct{ chat, msg, sender, emoji string }
 
 type fakeConn struct {
-	known     []connector.Chat
-	directory []connector.Person // what SearchPeople finds
-	opened    []string
-	looked    []string
-	failFile  string // SendFile fails for this name
-	failSend  bool   // Send fails
-	media     []byte // what FetchMedia returns
-	files     []connector.Attachment
-	sent      []sent
-	reacted   []reacted
+	known       []connector.Chat
+	directory   []connector.Person // what SearchPeople finds
+	opened      []string
+	looked      []string
+	failFile    string // SendFile fails for this name
+	failSend    bool   // Send fails
+	media       []byte // what FetchMedia returns
+	mediaErr    map[string]error
+	fetched     []string
+	onLoadOlder func()
+	files       []connector.Attachment
+	sent        []sent
+	reacted     []reacted
 }
 
 func (f *fakeConn) Start(context.Context) error { return nil }
 func (f *fakeConn) Events() <-chan any          { return nil }
 func (f *fakeConn) SelfID() string              { return "1" }
 func (f *fakeConn) LoadOlder(context.Context, string, time.Time, string) error {
+	if f.onLoadOlder != nil {
+		f.onLoadOlder()
+	}
 	return nil
 }
 func (f *fakeConn) Send(_ context.Context, _ string, text string, ms []connector.Mention, reply *connector.ReplyRef) error {
@@ -80,8 +86,14 @@ func (f *fakeConn) React(_ context.Context, chat, msg, sender, emoji string) err
 	f.reacted = append(f.reacted, reacted{chat, msg, sender, emoji})
 	return nil
 }
-func (f *fakeConn) FetchMedia(context.Context, connector.Media) ([]byte, error) { return f.media, nil }
-func (f *fakeConn) Close()                                                      {}
+func (f *fakeConn) FetchMedia(_ context.Context, md connector.Media) ([]byte, error) {
+	f.fetched = append(f.fetched, md.Ref)
+	if err := f.mediaErr[md.Ref]; err != nil {
+		return nil, err
+	}
+	return f.media, nil
+}
+func (f *fakeConn) Close() {}
 
 func newTestModel(t *testing.T, w, h int) (Model, *store.Store, *fakeConn) {
 	t.Helper()
@@ -1309,5 +1321,35 @@ func TestStalledSendTimesOut(t *testing.T) {
 	}
 	if !strings.Contains(sendError(sm.err), "offline") {
 		t.Fatalf("wording: %q", sendError(sm.err))
+	}
+}
+
+func TestExpiredPhotoLinkRenews(t *testing.T) {
+	var opened []string
+	previewFiles = func(p []string) error { opened = p; return nil }
+	defer func() { previewFiles = openFilesOS }()
+	m, st, fc := newTestModel(t, 120, 30)
+	m.kitty = nil
+	fc.media = []byte("\x89PNG....")
+	fc.mediaErr = map[string]error{"https://x.fbcdn.net/old.jpg": errors.New("media: HTTP 403 (link may have expired)")}
+	now := time.Now()
+	_ = st.UpsertChat(connector.Chat{ID: "g1", Name: "Plain group", LastActivity: now, Group: true})
+	msg := connector.Message{ID: "p1", ChatID: "g1", SenderID: "2", Time: now.Add(-40 * 24 * time.Hour),
+		Media: []connector.Media{{Kind: connector.Photo, Ref: "https://x.fbcdn.net/old.jpg"}}}
+	_, _ = st.AddMessage(msg, false)
+	fc.onLoadOlder = func() { // Messenger sends the message again with a fresh link
+		fresh := msg
+		fresh.Media = []connector.Media{{Kind: connector.Photo, Ref: "https://x.fbcdn.net/new.jpg"}}
+		_, _ = st.AddMessage(fresh, false)
+	}
+	m.reloadChats()
+	c, _ := st.Chat("g1")
+	m = run(m, m.openChat(c))
+	m = run(m, m.openPhoto(connector.Media{Kind: connector.Photo, Ref: "https://x.fbcdn.net/old.jpg"}))
+	if len(fc.fetched) < 2 || fc.fetched[len(fc.fetched)-1] != "https://x.fbcdn.net/new.jpg" {
+		t.Fatalf("fetched %v", fc.fetched)
+	}
+	if len(opened) != 1 {
+		t.Fatalf("photo not opened after renewing the link (opened %v)", opened)
 	}
 }

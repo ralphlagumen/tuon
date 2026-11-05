@@ -894,6 +894,8 @@ func (s *Store) Merge(from, to string) error {
 		`UPDATE tuon_reactions SET chat_id = ?2 WHERE chat_id = ?1`,
 		`INSERT OR IGNORE INTO tuon_participants (chat_id, user_id, nickname) SELECT ?2, user_id, nickname FROM tuon_participants WHERE chat_id = ?1`,
 		`DELETE FROM tuon_participants WHERE chat_id = ?1`,
+		`INSERT OR IGNORE INTO tuon_drafts (chat_id, text) SELECT ?2, text FROM tuon_drafts WHERE chat_id = ?1`,
+		`DELETE FROM tuon_drafts WHERE chat_id = ?1`,
 		`DELETE FROM tuon_chats WHERE id = ?1`,
 	}
 	for _, q := range steps {

@@ -327,3 +327,20 @@ func TestCompactGivesSpaceBack(t *testing.T) {
 		t.Fatal("nothing to give back the second time")
 	}
 }
+
+func TestMergeKeepsDraft(t *testing.T) {
+	s, err := OpenPath(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	now := time.Now()
+	_ = s.UpsertChat(connector.Chat{ID: "28147933184820682", LastActivity: now, Encrypted: true})
+	_ = s.SaveDrafts(map[string]string{"28147933184820682": "see you at 7"})
+	if err := s.Merge("28147933184820682", "100001279802241"); err != nil {
+		t.Fatal(err)
+	}
+	if d := s.Drafts(); d["100001279802241"] != "see you at 7" || d["28147933184820682"] != "" {
+		t.Fatalf("drafts after merge: %v", d)
+	}
+}

@@ -319,7 +319,10 @@ func playSoundOS(name string, volume int) {
 		}
 	default:
 		file := "/usr/share/sounds/freedesktop/stereo/" + name + ".oga"
-		if _, err := exec.LookPath("paplay"); err == nil {
+		if _, err := os.Stat(file); err != nil {
+			file = "" // no such sound here: let canberra or the bell try
+		}
+		if _, err := exec.LookPath("paplay"); err == nil && file != "" {
 			if exec.Command("paplay", fmt.Sprintf("--volume=%d", int(vol*65536)), file).Start() == nil {
 				return
 			}
