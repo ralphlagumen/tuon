@@ -24,9 +24,9 @@ Tuon logs in to Messenger as you, keeps your encryption keys, and shows text and
 
 While you chat, tuon runs inside a macOS sandbox that limits what it can touch on disk. It's a safety net for bugs and for code tuon processes from other people, **not yet a fence against a malicious dependency** (see "Limits"):
 
-- **It can't read the common secret stores:** SSH and cloud keys (`~/.ssh`, `~/.aws`, …), keychains, browser profiles and cookies, password managers, shell history, Mail and Messages. This is a list of known places, not everything private on your Mac.
-- **It can only write** to its own folder, Downloads (files you save) and temp folders.
-- **It only restricts files.** It doesn't yet stop tuon from starting other programs.
+- **It can't read the common secret stores:** SSH and cloud keys (`~/.ssh`, `~/.aws`, …), developer tokens (including `~/.claude`), keychains, browser profiles and cookies, password managers, other chat apps (Signal, Slack, Discord, WhatsApp, Telegram), other apps' private containers, shell and database histories, Mail and Messages. This is a list of known places, not everything private on your Mac: your documents stay readable, so you can attach them.
+- **It can only write** to its own folder, Downloads (files you save) and your own temp folder.
+- **It can only start a few programs:** the sound player, the clipboard tools, `open` (for photos and links), the FileVault check and its Touch ID helper. Shells and anything else are refused, and it can't script other apps (Apple Events). Network access stays open: Messenger needs it.
 - **Some commands run outside it:** logging in, `tuon setup`, `tuon history`, `tuon relink` and `tuon update`. The first four connect to Messenger and process messages unsandboxed.
 - `tuon sandbox-test` shows the file checks passing. `TUON_NO_SANDBOX=1 tuon` turns it off for troubleshooting. Linux and Windows don't have it yet.
 

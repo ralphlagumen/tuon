@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 
@@ -63,6 +64,30 @@ func sandboxTest() int {
 	check("write ~/Downloads (saved files)", true, write(filepath.Join(home, "Downloads", ".tuon-probe")))
 	check("write temp folder (photos for the viewer)", true, write(filepath.Join(os.TempDir(), "tuon-probe")))
 	check("read ~/Desktop (attachments you pick)", true, read(filepath.Join(home, "Desktop")))
+	check("read ~/.claude", false, read(filepath.Join(home, ".claude")))
+	check("read other apps' containers", false, read(filepath.Join(home, "Library", "Containers")))
+	check("write /private/tmp (shared temp)", false, write("/private/tmp/tuon-probe"))
+	run := func(name string, args ...string) error { return exec.Command(name, args...).Run() }
+	check("start /bin/sh", false, run("/bin/sh", "-c", "true"))
+	check("start /usr/bin/curl", false, run("/usr/bin/curl", "--version"))
+	check("start a copied program from temp", false, func() error {
+		p := filepath.Join(os.TempDir(), "tuon-probe-true")
+		b, err := os.ReadFile("/usr/bin/true")
+		if err == nil {
+			err = os.WriteFile(p, b, 0o700)
+		}
+		if err != nil {
+			return nil // couldn't set up: count as allowed, so the check fails loudly
+		}
+		defer os.Remove(p)
+		return run(p)
+	}())
+	check("script Finder (Apple Events)", false, run("/usr/bin/osascript", "-e", `tell application "Finder" to count windows`))
+	check("start fdesetup (FileVault check)", true, run("/usr/bin/fdesetup", "isactive"))
+	check("start pbpaste (paste)", true, run("/usr/bin/pbpaste"))
+	check("start afplay (new-message sound, muted here)", true, run("/usr/bin/afplay", "-v", "0", "/System/Library/Sounds/Pop.aiff"))
+	_, err := exec.Command("/usr/bin/osascript", "-e", "the clipboard as text").Output()
+	check("osascript clipboard (paste images, files)", true, err)
 	if fails > 0 {
 		fmt.Printf("  %d check(s) failed.\n", fails)
 		return 1

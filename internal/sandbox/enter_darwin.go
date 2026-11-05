@@ -27,7 +27,7 @@ func Command(args []string) (*exec.Cmd, string) {
 	if err != nil {
 		return nil, "sandbox unavailable: " + err.Error()
 	}
-	profile := Profile(realDir(home), realDir(os.TempDir()))
+	profile := Profile(realDir(home), realDir(os.TempDir()), exe)
 	cmd := exec.Command(sandboxExec, append([]string{"-p", profile, exe}, args...)...)
 	cmd.Env = append(os.Environ(), envMark+"=1")
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
