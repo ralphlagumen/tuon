@@ -78,7 +78,10 @@ type Conn struct {
 	e2eeOnce sync.Once
 	// resetAt: when we last dropped our session with a sender's device
 	// after it failed to decrypt (see resetSession)
-	resetAt   map[string]time.Time
+	resetAt map[string]time.Time
+	// failed: per sender device, the distinct messages that failed to
+	// decrypt since the last one that worked (see trackFailure)
+	failed    map[string]map[string]bool
 	fetchOnce sync.Once
 	// threadsSeen counts distinct chats received (known holds their keys),
 	// so paging can tell when a page brought nothing new
@@ -105,6 +108,24 @@ type Sealer interface {
 
 // SetSealer keeps the PIN-backup keys encrypted in the database.
 func (c *Conn) SetSealer(s Sealer) { c.seal = s }
+
+// WaitEncrypted waits until encrypted chats are connected (registering a
+// new device first, when allowed), so a short command doesn't quit halfway.
+func (c *Conn) WaitEncrypted(ctx context.Context) error {
+	for {
+		c.mu.Lock()
+		wa := c.wa
+		c.mu.Unlock()
+		if wa != nil && wa.IsConnected() {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return errors.New("encrypted chats didn't connect")
+		case <-time.After(300 * time.Millisecond):
+		}
+	}
+}
 
 // SetKeyDB puts the encrypted-chat keys in their own (encrypted) database.
 func (c *Conn) SetKeyDB(db *sql.DB) { c.keyDB = db }
@@ -607,6 +628,7 @@ func (c *Conn) onWA(raw any) {
 		}
 	}
 	tt := c.noteEncrypted(chat)
+	c.decryptedFrom(evt.Info.Sender)
 
 	msg := connector.Message{
 		ID:        evt.Info.ID,
@@ -651,6 +673,7 @@ func (c *Conn) noteEncrypted(chat waTypes.JID) table.ThreadType {
 func (c *Conn) onUndecryptable(evt *events.UndecryptableMessage) {
 	if !evt.IsUnavailable {
 		c.resetSession(evt.Info.Sender)
+		c.trackFailure(evt.Info.Sender, evt.Info.ID)
 	}
 	if evt.DecryptFailMode == events.DecryptFailHide {
 		return // reactions, receipts and the like: nothing to show
@@ -674,6 +697,39 @@ func (c *Conn) onUndecryptable(evt *events.UndecryptableMessage) {
 		Encrypted:    true,
 	}})
 	c.emit(connector.MessageEvent{Message: msg})
+}
+
+// troubleAfter: failed messages in a row from one device before the user
+// hears about it.
+const troubleAfter = 3
+
+// trackFailure counts distinct failed messages per sender device (each
+// failure is reported several times, once per retry) and tells the UI when
+// a device reaches troubleAfter — once, until a message from it works.
+func (c *Conn) trackFailure(sender waTypes.JID, msgID string) {
+	addr := sender.SignalAddress().String()
+	c.mu.Lock()
+	if c.failed == nil {
+		c.failed = map[string]map[string]bool{}
+	}
+	if c.failed[addr] == nil {
+		c.failed[addr] = map[string]bool{}
+	}
+	seen := c.failed[addr][msgID]
+	c.failed[addr][msgID] = true
+	n := len(c.failed[addr])
+	c.mu.Unlock()
+	if !seen && n == troubleAfter {
+		c.log.Warn().Str("device", addr).Int("failed", n).Msg("messages from this device keep failing to decrypt")
+		c.emit(connector.KeysTroubleEvent{UserID: sender.User, Failed: n})
+	}
+}
+
+// decryptedFrom clears the failure count once a device's message works.
+func (c *Conn) decryptedFrom(sender waTypes.JID) {
+	c.mu.Lock()
+	delete(c.failed, sender.SignalAddress().String())
+	c.mu.Unlock()
 }
 
 // resetSession drops our stored session with a sender's device after a

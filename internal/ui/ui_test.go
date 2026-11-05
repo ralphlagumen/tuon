@@ -1471,3 +1471,13 @@ func typeTextLocked(m Model, s string) Model {
 	}
 	return m
 }
+
+func TestKeysTroubleWarning(t *testing.T) {
+	m, st, _ := newTestModel(t, 200, 30)
+	_ = st.UpsertContact("100002876447027", "Jayson Vcr")
+	_ = st.UpsertChat(connector.Chat{ID: "100002876447027", LastActivity: time.Now(), Encrypted: true})
+	next, _ := m.Update(EventsMsg{connector.KeysTroubleEvent{UserID: "100002876447027", Failed: 3}})
+	if s := screen(next.(Model)); !strings.Contains(s, "Messages from Jayson keep failing") || !strings.Contains(s, "tuon relink") {
+		t.Fatalf("no warning:\n%s", s)
+	}
+}

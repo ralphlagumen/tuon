@@ -18,6 +18,23 @@ const settingRelink = "relink"
 // brand-new linked device. Contacts' phones then fetch fresh keys, which
 // fixes chats where someone's phone kept outdated keys for tuon.
 func relink() error {
+	if err := forgetDevice(); err != nil {
+		return err
+	}
+	// one step: connect (which registers the new device) and restore older
+	// encrypted messages with the PIN, the same as `tuon history`
+	fmt.Println("\n  Registering the new device…")
+	if err := history(); err != nil {
+		return fmt.Errorf("the new device will register when you next start tuon; restoring history failed: %w", err)
+	}
+	fmt.Println("\n  Last step, on your phone: remove the old \"tuon\" device in Messenger's")
+	fmt.Println("  settings (Privacy & safety, End-to-end encrypted chats). The newest one is this.")
+	return nil
+}
+
+// forgetDevice drops this device's keys and allows the next connection
+// to register a new one.
+func forgetDevice() error {
 	release, err := store.Lock()
 	if err != nil {
 		return err
@@ -26,11 +43,10 @@ func relink() error {
 	fmt.Print(`
   Re-link tuon as a new device
 
-  Tuon forgets its encryption keys and registers as a new linked device on
-  its next start. Your chats, messages and folders stay. Afterwards:
-    - Messenger may show a new login;
-    - remove the old "tuon" device in Messenger's settings;
-    - run ` + "`tuon history`" + ` once with your PIN to load older encrypted messages.
+  Tuon forgets its encryption keys and registers now as a new linked
+  device, then asks for your Messenger PIN to load older encrypted
+  messages again. Your chats, messages and folders stay. Messenger may
+  show a new login; afterwards, remove the old "tuon" device there.
 
   Type relink to continue: `)
 	if strings.TrimSpace(readLine()) != "relink" {
@@ -62,6 +78,5 @@ func relink() error {
 		return err
 	}
 	_, _ = st.DB.Exec(`VACUUM`)
-	fmt.Println("  Done. Start tuon to register the new device, then run `tuon history`.")
 	return nil
 }

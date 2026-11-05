@@ -113,6 +113,14 @@ type (
 	// messages arrive under the person's ID).
 	ChatAliasEvent struct{ From, To string }
 
+	// KeysTroubleEvent: messages from one person's device keep failing to
+	// decrypt live (they still arrive through the backup). Persistent cases
+	// mean that phone holds outdated keys for tuon: `tuon relink` fixes it.
+	KeysTroubleEvent struct {
+		UserID string
+		Failed int
+	}
+
 	// StatusEvent reports connection state. Err != nil means something broke.
 	StatusEvent struct {
 		Text string

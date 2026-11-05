@@ -552,6 +552,12 @@ func (m *Model) applyEvents(evts []any) tea.Cmd {
 		case connector.ParticipantEvent:
 			e.ChatID = m.st.Resolve(e.ChatID)
 			_ = m.st.AddParticipant(e)
+		case connector.KeysTroubleEvent:
+			who := e.UserID
+			if c, err := m.st.Chat(m.st.Resolve(e.UserID)); err == nil && c.Display != "" {
+				who = c.Display
+			}
+			m.Warn(fmt.Sprintf("Messages from %s keep failing to decrypt live (they still arrive through your backup). If this keeps up, quit and run `tuon relink`.", firstName(who)))
 		case connector.StatusEvent:
 			m.status, m.statusErr = e.Text, e.Err != nil
 			if e.Err != nil {

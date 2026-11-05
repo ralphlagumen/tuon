@@ -68,6 +68,12 @@ func history() error {
 	defer conn.Close()
 	st.Self = conn.SelfID()
 	go keep(st, conn) // messages that arrive meanwhile still get saved
+	wctx, wcancel := context.WithTimeout(ctx, 45*time.Second)
+	err = conn.WaitEncrypted(wctx) // also finishes registering a new device
+	wcancel()
+	if err != nil {
+		return err
+	}
 
 	if conn.HasHistory() {
 		fmt.Println("  Older encrypted messages are already set up.")
