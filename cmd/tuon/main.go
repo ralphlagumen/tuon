@@ -58,6 +58,11 @@ func main() {
 				fail(err)
 			}
 			return
+		case "relink":
+			if err := relink(); err != nil {
+				fail(err)
+			}
+			return
 		case "sandbox-test":
 			os.Exit(sandboxTest())
 		case "logout":

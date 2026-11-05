@@ -169,5 +169,11 @@ func useVault(st *store.Store) (*sql.DB, bool, error) {
 	} else if n > 0 {
 		fmt.Printf("  Moved %d encryption keys into the encrypted key store.\n", n)
 	}
-	return kdb, fresh && !keystore.HasDevice(kdb), nil
+	hasDevice := keystore.HasDevice(kdb)
+	relinking := st.Setting(settingRelink, "") == "1"
+	if relinking && hasDevice { // the new device is registered: done
+		_ = st.SetSetting(settingRelink, "")
+		relinking = false
+	}
+	return kdb, (fresh || relinking) && !hasDevice, nil
 }
