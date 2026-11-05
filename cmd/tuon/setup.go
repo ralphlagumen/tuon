@@ -17,6 +17,7 @@ import (
 
 	"github.com/ralph/tuon/internal/auth"
 	"github.com/ralph/tuon/internal/connector/messenger"
+	"github.com/ralph/tuon/internal/sandbox"
 	"github.com/ralph/tuon/internal/store"
 )
 
@@ -50,6 +51,9 @@ func loadLogin() (auth.Creds, error) {
 	}
 	if !term.IsTerminal(int(os.Stdin.Fd())) {
 		return auth.Creds{}, fmt.Errorf("not logged in: run `tuon login` first")
+	}
+	if sandbox.Active() { // logging in needs a browser: the launcher does it
+		os.Exit(exitNeedSetup)
 	}
 	if err := setup(); err != nil { // first run: log in, then offer history
 		return auth.Creds{}, err

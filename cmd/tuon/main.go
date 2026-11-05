@@ -27,11 +27,17 @@ func main() {
 	debug.SetGCPercent(50)
 	debug.SetMemoryLimit(96 << 20)
 	args := os.Args[1:]
-	// the chat app itself runs sandboxed (login, update etc. need more)
-	if len(args) == 0 || args[0] == "--here" || args[0] == "-here" || args[0] == "sandbox-test" {
+	privateFiles() // everything tuon writes is readable only by you
+	// the chat app runs sandboxed, as a child of this unsandboxed launcher:
+	// logging in (a browser that needs the keychain) happens out here
+	if len(args) == 0 || args[0] == "--here" || args[0] == "-here" {
+		if code, ok := launchSandboxed(args); ok {
+			os.Exit(code)
+		}
+	}
+	if len(args) > 0 && args[0] == "sandbox-test" {
 		sandboxNote = sandbox.Enter() // only returns if it couldn't
 	}
-	privateFiles() // everything tuon writes is readable only by you
 	if len(args) > 0 {
 		switch args[0] {
 		case "--here", "-here": // tuon always runs in place now; kept for old habits
@@ -85,6 +91,9 @@ func main() {
 				fail(err)
 			}
 			return
+		}
+		if sandbox.Active() { // the launcher logs in, outside the sandbox
+			os.Exit(exitNeedLogin)
 		}
 		// the session expired: log in again right here, then open tuon
 		fmt.Println("\n  Messenger logged you out. Log in again to keep going.")
