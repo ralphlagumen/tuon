@@ -764,6 +764,7 @@ func (c *Conn) trackFailure(sender waTypes.JID, msgID string) {
 func (c *Conn) decryptedFrom(sender waTypes.JID) {
 	addr := sender.SignalAddress().String()
 	c.mu.Lock()
+	warned := len(c.failed[addr]) >= troubleAfter
 	delete(c.failed, addr)
 	if c.okDevices == nil {
 		c.okDevices = map[string]bool{}
@@ -773,6 +774,9 @@ func (c *Conn) decryptedFrom(sender waTypes.JID) {
 	c.mu.Unlock()
 	if first {
 		c.log.Warn().Str("device", addr).Msg("decrypted a message from this device")
+	}
+	if warned { // the UI can take its warning down
+		c.emit(connector.KeysTroubleEvent{UserID: sender.User, Failed: 0})
 	}
 }
 

@@ -101,6 +101,7 @@ type Model struct {
 	askedName    map[string]bool // senders whose name we already asked Messenger for
 	checkAt      time.Time       // a redraw is due then, to flip "sending…" to "not sent"
 	warning      string          // a lasting safety warning shown in the header
+	keysWarn     string          // the decrypt warning, so it can be taken down when things recover
 	lock         lockConfig      // the lock screen, once main turns it on
 	locked       bool
 	unlocking    bool
@@ -561,11 +562,19 @@ func (m *Model) applyEvents(evts []any) tea.Cmd {
 			e.ChatID = m.st.Resolve(e.ChatID)
 			_ = m.st.AddParticipant(e)
 		case connector.KeysTroubleEvent:
+			if e.Failed == 0 { // decrypting again: take our warning down
+				if m.keysWarn != "" && m.warning == m.keysWarn {
+					m.warning = ""
+				}
+				m.keysWarn = ""
+				continue
+			}
 			who := e.UserID
 			if c, err := m.st.Chat(m.st.Resolve(e.UserID)); err == nil && c.Display != "" {
 				who = c.Display
 			}
-			m.Warn(fmt.Sprintf("Messages from %s keep failing to decrypt live (they still arrive through your backup). If this keeps up, quit and run `tuon relink`.", firstName(who)))
+			m.keysWarn = fmt.Sprintf("Messages from %s keep failing to decrypt live (they still arrive through your backup). If this keeps up, quit and run `tuon relink`.", firstName(who))
+			m.Warn(m.keysWarn)
 		case connector.StatusEvent:
 			m.status, m.statusErr = e.Text, e.Err != nil
 			if e.Err != nil {
@@ -595,9 +604,6 @@ func atoiOr(s string, def int) int {
 	}
 	return n
 }
-
-// playChime: one soft tick for new messages (macOS "Tink", half volume).
-// playChime: one soft tick for new messages.
 
 func (m *Model) reloadChats() {
 	selected := m.rowKey(m.cursor)

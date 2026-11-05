@@ -1480,6 +1480,11 @@ func TestKeysTroubleWarning(t *testing.T) {
 	if s := screen(next.(Model)); !strings.Contains(s, "Messages from Jayson keep failing") || !strings.Contains(s, "tuon relink") {
 		t.Fatalf("no warning:\n%s", s)
 	}
+	// their messages decrypt again: the warning goes (a FileVault one would stay)
+	next, _ = next.(Model).Update(EventsMsg{connector.KeysTroubleEvent{UserID: "100002876447027", Failed: 0}})
+	if s := screen(next.(Model)); strings.Contains(s, "keep failing") {
+		t.Fatalf("warning stayed after recovery:\n%s", s)
+	}
 }
 
 func TestPreviewsOff(t *testing.T) {

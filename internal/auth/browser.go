@@ -218,10 +218,17 @@ func (d *devPipe) cookies(ctx context.Context, id int) (map[string]string, error
 		}
 		out := map[string]string{}
 		for _, c := range resp.Result.Cookies {
-			if strings.HasSuffix(c.Domain, "facebook.com") {
+			if isFacebookDomain(c.Domain) {
 				out[c.Name] = c.Value
 			}
 		}
 		return out, nil
 	}
+}
+
+// isFacebookDomain: facebook.com or a subdomain of it (".facebook.com",
+// "www.facebook.com"), never a look-alike such as "evilfacebook.com".
+func isFacebookDomain(d string) bool {
+	d = strings.TrimPrefix(strings.ToLower(d), ".")
+	return d == "facebook.com" || strings.HasSuffix(d, ".facebook.com")
 }

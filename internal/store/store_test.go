@@ -356,6 +356,8 @@ func TestSensitiveColumnsEncrypted(t *testing.T) {
 	// written before encryption was on
 	_, _ = s.AddMessage(connector.Message{ID: "old", ChatID: "c", SenderID: "2", Text: "old secret", Time: now.Add(-time.Hour)}, false)
 	_ = s.SaveDrafts(map[string]string{"c": "draft secret"})
+	// looks like the sealed prefix to a case-insensitive LIKE: must still be sealed
+	_, _ = s.AddMessage(connector.Message{ID: "caps", ChatID: "c", SenderID: "2", Text: "V1: caps secret", Time: now.Add(-time.Minute)}, false)
 
 	v, err := vault.CreatePassphrase(t.TempDir(), "correct horse battery")
 	if err != nil {
@@ -392,7 +394,7 @@ func TestSensitiveColumnsEncrypted(t *testing.T) {
 			t.Fatalf("media not readable: %+v", m.Media)
 		}
 	}
-	if got["old"] != "old secret" || got["new"] != "new secret" {
+	if got["old"] != "old secret" || got["new"] != "new secret" || got["caps"] != "V1: caps secret" {
 		t.Fatalf("texts = %v", got)
 	}
 	if !s.HasMissing("c") || len(s.MissingChats()) != 1 {

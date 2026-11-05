@@ -15,12 +15,17 @@ import (
 func TestTroubleNoticeOncePerStreak(t *testing.T) {
 	c := &Conn{log: zerolog.Nop(), events: make(chan any, 16), ctx: context.Background()}
 	jayson := waTypes.JID{User: "100002876447027", Device: 56, Server: waTypes.MessengerServer}
+	recovered := 0
 	events := func() (n int) {
 		for {
 			select {
 			case e := <-c.events:
 				if k, ok := e.(connector.KeysTroubleEvent); ok && k.UserID == "100002876447027" {
-					n++
+					if k.Failed == 0 {
+						recovered++
+					} else {
+						n++
+					}
 				}
 			default:
 				return n
@@ -40,7 +45,14 @@ func TestTroubleNoticeOncePerStreak(t *testing.T) {
 	if n := events(); n != 1 {
 		t.Fatalf("want exactly one notice at 3 failures, got %d", n)
 	}
-	c.decryptedFrom(jayson) // one works: streak over
+	c.decryptedFrom(jayson) // one works: streak over, warning can go
+	if events(); recovered != 1 {
+		t.Fatalf("want one recovery notice, got %d", recovered)
+	}
+	c.decryptedFrom(jayson)
+	if events(); recovered != 1 {
+		t.Fatal("recovery noticed twice")
+	}
 	for _, id := range []string{"m5", "m6"} {
 		c.trackFailure(jayson, id)
 	}

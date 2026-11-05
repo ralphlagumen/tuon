@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/ralph/tuon/internal/safefile"
 	"os"
 	"path/filepath"
 	"strings"
@@ -145,22 +146,31 @@ func SaveSealed(dir string, v Sealer, c Creds) error {
 		return err
 	}
 	tmp := sealedPath(dir) + ".tmp"
-	if err := os.WriteFile(tmp, v.Seal(b), 0o600); err != nil {
+	if err := safefile.WriteFile(tmp, v.Seal(b), 0o600); err != nil {
 		return err
 	}
 	if err := os.Rename(tmp, sealedPath(dir)); err != nil {
 		return err
 	}
 	where = "vault"
-	_ = keyringDelete(service, account)
-	_ = os.Remove(filePath(dir))
-	_ = os.Remove(legacyPath(dir))
+	removeOld(dir)
 	return nil
 }
 
-// LoadSealed reads the encrypted session. A session still in the keychain
-// or a plain file (from before the vault) is moved into the vault on the way.
-func LoadSealed(dir string, v Sealer) (Creds, error) {
+// removeOld deletes the session from the places used before the vault
+// (keychain, login.json, cookies.txt). Run on every sealed load too, so a
+// delete that failed once is tried again.
+func removeOld(dir string) {
+	_ = keyringDelete(service, account)
+	_ = os.Remove(filePath(dir))
+	_ = os.Remove(legacyPath(dir))
+}
+
+// LoadSealed reads the encrypted session. With migrate, a session still in
+// the keychain or a plain file (from before the vault) is moved into the
+// vault on the way; without it those places are ignored, so a session
+// planted there later can't slip in.
+func LoadSealed(dir string, v Sealer, migrate bool) (Creds, error) {
 	if b, err := os.ReadFile(sealedPath(dir)); err == nil {
 		plain, err := v.Open(b)
 		if err != nil {
@@ -168,9 +178,13 @@ func LoadSealed(dir string, v Sealer) (Creds, error) {
 		}
 		var c Creds
 		if json.Unmarshal(plain, &c) == nil && c.Valid() {
+			removeOld(dir)
 			return c, nil
 		}
 		return Creds{}, errors.New("saved session is damaged: run `tuon login`")
+	}
+	if !migrate {
+		return Creds{}, errors.New("not logged in")
 	}
 	c, err := Load(dir) // the old places
 	if err != nil {

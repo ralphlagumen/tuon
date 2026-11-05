@@ -39,7 +39,7 @@ func liveSetup(t *testing.T) (st *store.Store, kdb *sql.DB, creds auth.Creds, re
 		t.Fatal(err)
 	}
 	st.SetCipher(v)
-	if creds, err = auth.LoadSealed(dir, v); err != nil {
+	if creds, err = auth.LoadSealed(dir, v, false); err != nil {
 		t.Fatal(err)
 	}
 	if kdb, err = keystore.Open(dir, v.DeriveKey("keys.db/2")); err != nil {

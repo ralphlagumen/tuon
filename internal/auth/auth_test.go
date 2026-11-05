@@ -96,7 +96,7 @@ func TestSessionMovesIntoVault(t *testing.T) {
 	if err := Save(dir, old); err != nil {
 		t.Fatal(err)
 	}
-	c, err := LoadSealed(dir, xorSealer{})
+	c, err := LoadSealed(dir, xorSealer{}, true)
 	if err != nil || c.Cookies["xs"] != "secret" {
 		t.Fatalf("migrate: %+v %v", c, err)
 	}
@@ -107,7 +107,7 @@ func TestSessionMovesIntoVault(t *testing.T) {
 	if strings.Contains(string(raw), "secret") {
 		t.Fatal("login.enc holds the session in the clear")
 	}
-	if again, err := LoadSealed(dir, xorSealer{}); err != nil || again.Cookies["xs"] != "secret" {
+	if again, err := LoadSealed(dir, xorSealer{}, false); err != nil || again.Cookies["xs"] != "secret" {
 		t.Fatalf("reload: %v", err)
 	}
 	if err := Delete(dir); err != nil {
@@ -115,5 +115,43 @@ func TestSessionMovesIntoVault(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "login.enc")); !os.IsNotExist(err) {
 		t.Fatal("logout left login.enc")
+	}
+}
+
+// R14: once migrated, a plain session planted in the old places is ignored
+// and removed, never loaded.
+func TestPlantedPlainSessionIgnored(t *testing.T) {
+	dir := t.TempDir()
+	store := map[string]string{}
+	keyringGet = func(s, a string) (string, error) {
+		if v, ok := store[s+a]; ok {
+			return v, nil
+		}
+		return "", keyring.ErrNotFound
+	}
+	keyringSet = func(s, a, v string) error { store[s+a] = v; return nil }
+	keyringDelete = func(s, a string) error { delete(store, s+a); return nil }
+	defer func() { keyringGet, keyringSet, keyringDelete = keyring.Get, keyring.Set, keyring.Delete }()
+
+	planted := Creds{Platform: "messenger", Cookies: map[string]string{"c_user": "666", "xs": "attacker"}}
+	if err := Save(dir, planted); err != nil {
+		t.Fatal(err)
+	}
+	if c, err := LoadSealed(dir, xorSealer{}, false); err == nil {
+		t.Fatalf("loaded a planted session: %+v", c)
+	}
+	mine := Creds{Platform: "messenger", Cookies: map[string]string{"c_user": "1", "xs": "mine"}}
+	if err := SaveSealed(dir, xorSealer{}, mine); err != nil {
+		t.Fatal(err)
+	}
+	if err := Save(dir, planted); err != nil { // planted again, next to a real login.enc
+		t.Fatal(err)
+	}
+	c, err := LoadSealed(dir, xorSealer{}, false)
+	if err != nil || c.Cookies["xs"] != "mine" {
+		t.Fatalf("got %+v %v", c, err)
+	}
+	if len(store) != 0 {
+		t.Fatal("the planted copy wasn't removed")
 	}
 }

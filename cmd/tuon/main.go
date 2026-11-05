@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/ralph/tuon/internal/safefile"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -140,7 +141,7 @@ func run() error {
 	// Logs go to a file so they never draw over the UI.
 	logPath := filepath.Join(store.Dir(), "tuon.log")
 	trimLog(logPath)
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	logFile, err := safefile.Append(logPath, 0o600)
 	if err != nil {
 		return err
 	}

@@ -78,3 +78,14 @@ func TestRemoveStaleProfiles(t *testing.T) {
 		}
 	}
 }
+
+func TestIsFacebookDomain(t *testing.T) {
+	for d, want := range map[string]bool{
+		".facebook.com": true, "facebook.com": true, "www.facebook.com": true, "WWW.Facebook.com": true,
+		"evilfacebook.com": false, "facebook.com.evil.net": false, "": false, ".messenger.com": false,
+	} {
+		if got := isFacebookDomain(d); got != want {
+			t.Errorf("isFacebookDomain(%q) = %v", d, got)
+		}
+	}
+}

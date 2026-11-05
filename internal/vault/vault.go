@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/ralph/tuon/internal/safefile"
 	"os"
 	"path/filepath"
 	"strings"
@@ -181,6 +182,9 @@ func UnlockPassphrase(dir, pass string) (*Vault, error) {
 // CheckPassphrase reports whether pass opens this (already unlocked) vault,
 // for the idle-lock screen.
 func (v *Vault) CheckPassphrase(pass string) bool {
+	if v.kind != KindPassphrase {
+		return false // a Touch ID vault has no passphrase (and no Argon2 settings to run)
+	}
 	_, err := open(v.dir, v.file, v.file.passKEK(pass))
 	return err == nil
 }
@@ -323,11 +327,20 @@ func (v *Vault) save() error {
 	if err := os.MkdirAll(v.dir, 0o700); err != nil {
 		return err
 	}
+	// on disk before the rename, and the rename on disk before returning:
+	// a crash must never leave a half-written vault.json (no key = no data)
 	tmp := filepath.Join(v.dir, fileName+".tmp")
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+	if err := safefile.WriteFile(tmp, b, 0o600); err != nil { // synced, never through a link
 		return err
 	}
-	return os.Rename(tmp, filepath.Join(v.dir, fileName))
+	if err := os.Rename(tmp, filepath.Join(v.dir, fileName)); err != nil {
+		return err
+	}
+	if d, err := os.Open(v.dir); err == nil {
+		_ = d.Sync()
+		d.Close()
+	}
+	return nil
 }
 
 func readFile(dir string) (file, error) {

@@ -152,7 +152,7 @@ func loggedIn() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if _, err := auth.LoadSealed(store.Dir(), v); err != nil {
+	if _, err := auth.LoadSealed(store.Dir(), v, migrateLogin()); err != nil {
 		return false, err
 	}
 	return true, nil

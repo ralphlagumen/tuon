@@ -709,7 +709,7 @@ func (s *Store) EncryptAll() (int, error) {
 	}
 	n := 0
 	seal := func(table, key, col string) error {
-		rows, err := s.DB.Query(`SELECT ` + key + `, ` + col + ` FROM ` + table + ` WHERE ` + col + ` <> '' AND ` + col + ` NOT LIKE 'v1:%'`)
+		rows, err := s.DB.Query(`SELECT ` + key + `, ` + col + ` FROM ` + table + ` WHERE ` + col + ` <> '' AND substr(` + col + `, 1, 3) <> 'v1:'`) // case-sensitive, unlike LIKE
 		if err != nil {
 			return err
 		}
@@ -743,8 +743,10 @@ func (s *Store) EncryptAll() (int, error) {
 			return n, err
 		}
 	}
-	if n > 0 { // push the change out of the WAL and rebuild the file
-		_, _ = s.DB.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
+	// empty the WAL every start (old plain pages can linger there), and
+	// rebuild the file when something was just sealed
+	_, _ = s.DB.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
+	if n > 0 {
 		_, _ = s.DB.Exec(`VACUUM`)
 	}
 	return n, nil

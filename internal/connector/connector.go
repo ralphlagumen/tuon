@@ -118,6 +118,7 @@ type (
 	// KeysTroubleEvent: messages from one person's device keep failing to
 	// decrypt live (they still arrive through the backup). Persistent cases
 	// mean that phone holds outdated keys for tuon: `tuon relink` fixes it.
+	// Failed == 0: that device's messages decrypt again.
 	KeysTroubleEvent struct {
 		UserID string
 		Failed int

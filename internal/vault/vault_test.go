@@ -151,3 +151,15 @@ func TestFindHelperOnlyNextToTuon(t *testing.T) {
 		t.Fatalf("didn't find the helper next to tuon: %v", h)
 	}
 }
+
+// R12: the lock screen falls back to the passphrase check when the Touch ID
+// helper is missing; on a Touch ID vault that must refuse, not crash.
+func TestEnclavePassphraseCheckRefuses(t *testing.T) {
+	v, err := CreateEnclave(t.TempDir(), &fakeEnclave{confirm: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.CheckPassphrase("") || v.CheckPassphrase("anything") {
+		t.Fatal("a Touch ID vault accepted a passphrase")
+	}
+}

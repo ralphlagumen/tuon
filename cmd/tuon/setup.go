@@ -16,6 +16,7 @@ import (
 
 	"github.com/ralph/tuon/internal/auth"
 	"github.com/ralph/tuon/internal/connector/messenger"
+	"github.com/ralph/tuon/internal/keystore"
 	"github.com/ralph/tuon/internal/sandbox"
 	"github.com/ralph/tuon/internal/store"
 )
@@ -36,16 +37,21 @@ const usage = `tuon: calm, chat-only Messenger
 
 var stdin = bufio.NewReader(os.Stdin)
 
+// migrateLogin: a session from before the vault (keychain, login.json,
+// cookies.txt) is only picked up while moving an old install over, before
+// keys.db exists. After that, a file appearing there is ignored.
+func migrateLogin() bool { return !keystore.Exists(store.Dir()) }
+
 // loadLogin returns the saved login, asking you to log in if there's none.
 func loadLogin() (auth.Creds, error) {
-	if c := strings.TrimSpace(os.Getenv("TUON_COOKIES")); c != "" {
-		return auth.Creds{Platform: "messenger", Cookies: auth.ParseCookieLine(c)}, nil
-	}
-	v, err := openVault()
+	v, err := openVault() // first, even with TUON_COOKIES: nothing is stored unencrypted
 	if err != nil {
 		return auth.Creds{}, err
 	}
-	if c, err := auth.LoadSealed(store.Dir(), v); err == nil {
+	if c := strings.TrimSpace(os.Getenv("TUON_COOKIES")); c != "" {
+		return auth.Creds{Platform: "messenger", Cookies: auth.ParseCookieLine(c)}, nil
+	}
+	if c, err := auth.LoadSealed(store.Dir(), v, migrateLogin()); err == nil {
 		return c, nil
 	}
 	if !term.IsTerminal(int(os.Stdin.Fd())) {
@@ -57,7 +63,7 @@ func loadLogin() (auth.Creds, error) {
 	if err := setup(); err != nil { // first run: log in, then offer history
 		return auth.Creds{}, err
 	}
-	return auth.LoadSealed(store.Dir(), v)
+	return auth.LoadSealed(store.Dir(), v, migrateLogin())
 }
 
 // login asks how to log in, then saves the session (never the password).
@@ -260,8 +266,8 @@ func privateFiles() {
 	dir := store.Dir()
 	_ = os.MkdirAll(dir, 0o700)
 	_ = filepath.Walk(dir, func(p string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil
+		if err != nil || info.Mode()&os.ModeSymlink != 0 {
+			return nil // chmod follows links: never touch what one points at
 		}
 		if info.IsDir() {
 			_ = os.Chmod(p, 0o700)
