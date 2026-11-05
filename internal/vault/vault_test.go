@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -20,7 +21,7 @@ func (f *fakeEnclave) Create() ([]byte, []byte, error) {
 	return []byte("opaque-chip-blob"), f.priv.PublicKey().Bytes(), nil
 }
 
-func (f *fakeEnclave) Derive(key, peer []byte, _ string) ([]byte, error) {
+func (f *fakeEnclave) Derive(key, peer []byte) ([]byte, error) {
 	if !f.confirm {
 		return nil, ErrNotConfirmed
 	}
@@ -42,7 +43,7 @@ func TestEnclaveVault(t *testing.T) {
 	if !Sealed(sealed) || strings.Contains(sealed, "meet") {
 		t.Fatalf("not sealed: %q", sealed)
 	}
-	again, err := UnlockEnclave(dir, se, "test")
+	again, err := UnlockEnclave(dir, se)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +51,7 @@ func TestEnclaveVault(t *testing.T) {
 		t.Fatalf("open = %q, %v", got, err)
 	}
 	se.confirm = false
-	if _, err := UnlockEnclave(dir, se, "test"); err != ErrNotConfirmed {
+	if _, err := UnlockEnclave(dir, se); err != ErrNotConfirmed {
 		t.Fatalf("cancelled Touch ID should fail, got %v", err)
 	}
 	// the vault file alone holds nothing readable
@@ -116,5 +117,37 @@ func TestHandoffAdopt(t *testing.T) {
 	}
 	if _, err := Adopt(dir, []byte("short")); err == nil {
 		t.Fatal("bad key size accepted")
+	}
+}
+
+func TestFindHelperOnlyNextToTuon(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("macOS only")
+	}
+	exe, _ := os.Executable()
+	exe, _ = filepath.EvalSymlinks(exe)
+	next := filepath.Join(filepath.Dir(exe), "tuon-keyhelper")
+	defer os.Remove(next)
+
+	// one on PATH only: not used
+	onPath := t.TempDir()
+	if err := os.WriteFile(filepath.Join(onPath, "tuon-keyhelper"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", onPath)
+	if h := FindHelper(); h != nil {
+		t.Fatalf("used a helper from PATH: %s", h.Path)
+	}
+	// next to tuon but writable by others: not used
+	if err := os.WriteFile(next, []byte("#!/bin/sh\n"), 0o777); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.Chmod(next, 0o777)
+	if h := FindHelper(); h != nil {
+		t.Fatal("used a helper others can change")
+	}
+	_ = os.Chmod(next, 0o755)
+	if h := FindHelper(); h == nil || h.Path != next {
+		t.Fatalf("didn't find the helper next to tuon: %v", h)
 	}
 }

@@ -79,7 +79,7 @@ func Kind(dir string) string {
 // Enclave is the Secure Enclave side (the Swift helper on macOS).
 type Enclave interface {
 	Create() (key, pub []byte, err error)
-	Derive(key, peer []byte, reason string) ([]byte, error)
+	Derive(key, peer []byte) ([]byte, error)
 }
 
 // CreateEnclave makes a new vault guarded by the Secure Enclave. It needs no
@@ -138,7 +138,7 @@ func CreatePassphrase(dir, pass string) (*Vault, error) {
 }
 
 // UnlockEnclave opens the vault with Touch ID / the Mac password.
-func UnlockEnclave(dir string, se Enclave, reason string) (*Vault, error) {
+func UnlockEnclave(dir string, se Enclave) (*Vault, error) {
 	f, err := readFile(dir)
 	if err != nil {
 		return nil, err
@@ -151,7 +151,7 @@ func UnlockEnclave(dir string, se Enclave, reason string) (*Vault, error) {
 	if err := errors.Join(err1, err2); err != nil {
 		return nil, fmt.Errorf("vault file damaged: %w", err)
 	}
-	shared, err := se.Derive(seKey, peer, reason)
+	shared, err := se.Derive(seKey, peer)
 	if err != nil {
 		return nil, err
 	}

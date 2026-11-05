@@ -3,8 +3,11 @@
 // password. tuon talks to this helper over stdin/stdout.
 //
 //   tuon-keyhelper create          -> {"key": <wrapped SE key>, "pub": <public key>}
-//   tuon-keyhelper derive          stdin {"key","peer","reason"} -> {"secret": ...} (asks Touch ID)
-//   tuon-keyhelper check <reason>  -> exit 0 when the owner confirms (Touch ID or password)
+//   tuon-keyhelper derive  stdin {"key","peer"} -> {"secret": ...} (asks Touch ID)
+//   tuon-keyhelper check   -> exit 0 when the owner confirms (Touch ID or password)
+//
+// The Touch ID text is fixed here, never taken from the caller: another
+// program running the helper can't dress its request up as something else.
 import CryptoKit
 import Foundation
 import LocalAuthentication
@@ -21,6 +24,8 @@ func out(_ obj: [String: String]) {
 
 let args = CommandLine.arguments
 guard args.count >= 2 else { fail("usage: tuon-keyhelper create|derive|check") }
+let unlockReason = "unlock tuon and your Messenger chats"
+
 guard SecureEnclave.isAvailable else { fail("no Secure Enclave on this Mac", 3) }
 
 switch args[1] {
@@ -46,7 +51,7 @@ case "derive":
         fail("derive: bad input")
     }
     let ctx = LAContext()
-    ctx.localizedReason = obj["reason"] ?? "unlock tuon"
+    ctx.localizedReason = unlockReason
     do {
         let key = try SecureEnclave.P256.KeyAgreement.PrivateKey(dataRepresentation: keyData, authenticationContext: ctx)
         let peer = try P256.KeyAgreement.PublicKey(x963Representation: peerData)
@@ -59,10 +64,9 @@ case "derive":
 
 case "check":
     let ctx = LAContext()
-    let reason = args.count > 2 ? args[2] : "unlock tuon"
     var ok = false
     let done = DispatchSemaphore(value: 0)
-    ctx.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason) { success, _ in
+    ctx.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: unlockReason) { success, _ in
         ok = success
         done.signal()
     }

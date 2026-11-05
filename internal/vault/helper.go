@@ -16,8 +16,10 @@ import (
 // Secure Enclave (Go can't reach CryptoKit directly).
 type Helper struct{ Path string }
 
-// FindHelper looks for tuon-keyhelper next to tuon, then on PATH. It returns
-// nil where there's no Secure Enclave support (not macOS, or not built).
+// FindHelper finds tuon-keyhelper next to tuon, and only there: never on
+// PATH, where another program could put its own. A helper that other users
+// can change isn't used. It returns nil where there's no Secure Enclave
+// support (not macOS, or not built).
 func FindHelper() *Helper {
 	if runtime.GOOS != "darwin" {
 		return nil
@@ -25,13 +27,10 @@ func FindHelper() *Helper {
 	if exe, err := os.Executable(); err == nil {
 		if exe, err = filepath.EvalSymlinks(exe); err == nil {
 			p := filepath.Join(filepath.Dir(exe), "tuon-keyhelper")
-			if st, err := os.Stat(p); err == nil && !st.IsDir() {
+			if st, err := os.Stat(p); err == nil && st.Mode().IsRegular() && st.Mode().Perm()&0o022 == 0 {
 				return &Helper{Path: p}
 			}
 		}
-	}
-	if p, err := exec.LookPath("tuon-keyhelper"); err == nil {
-		return &Helper{Path: p}
 	}
 	return nil
 }
@@ -71,9 +70,9 @@ func (h *Helper) Create() (key, pub []byte, err error) {
 }
 
 // Derive runs the key agreement inside the chip; macOS asks for Touch ID
-// or the Mac password, showing reason.
-func (h *Helper) Derive(key, peer []byte, reason string) ([]byte, error) {
-	in, _ := json.Marshal(map[string]string{"key": b64(key), "peer": b64(peer), "reason": reason})
+// or the Mac password, with the helper's own fixed text.
+func (h *Helper) Derive(key, peer []byte) ([]byte, error) {
+	in, _ := json.Marshal(map[string]string{"key": b64(key), "peer": b64(peer)})
 	b, err := h.run(in, "derive")
 	if err != nil {
 		return nil, err
@@ -87,7 +86,7 @@ func (h *Helper) Derive(key, peer []byte, reason string) ([]byte, error) {
 
 // Check asks the owner to confirm (Touch ID or Mac password), for the idle
 // lock: the key stays in memory, this only proves who's at the keyboard.
-func (h *Helper) Check(reason string) error {
-	_, err := h.run(nil, "check", reason)
+func (h *Helper) Check() error {
+	_, err := h.run(nil, "check")
 	return err
 }

@@ -41,7 +41,7 @@ func openVault() (*vault.Vault, error) {
 			return nil, errors.New("tuon-keyhelper is missing, so the Touch ID lock can't open: run ./install.sh again")
 		}
 		fmt.Println("  Unlock tuon with Touch ID or your Mac password…")
-		vlt, err = vault.UnlockEnclave(dir, h, "unlock your chats")
+		vlt, err = vault.UnlockEnclave(dir, h)
 		if errors.Is(err, vault.ErrNotConfirmed) {
 			return nil, errors.New("not unlocked")
 		}

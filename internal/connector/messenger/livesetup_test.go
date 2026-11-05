@@ -26,7 +26,7 @@ func liveSetup(t *testing.T) (st *store.Store, kdb *sql.DB, creds auth.Creds, re
 		if h == nil {
 			t.Fatal("tuon-keyhelper not found")
 		}
-		v, err = vault.UnlockEnclave(dir, h, "tuon live diagnostics")
+		v, err = vault.UnlockEnclave(dir, h)
 	} else {
 		t.Skip("passphrase vaults aren't supported in live tests")
 	}

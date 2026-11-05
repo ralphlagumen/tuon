@@ -174,7 +174,7 @@ func run() error {
 	if vlt != nil { // lock the screen after 10 idle minutes, or on :lock
 		var touch func() error
 		if h := vault.FindHelper(); vlt.Kind() == vault.KindEnclave && h != nil {
-			touch = func() error { return h.Check("unlock tuon") }
+			touch = func() error { return h.Check() }
 		}
 		model.SetLock(touch, vlt.CheckPassphrase, 10*time.Minute)
 	}
