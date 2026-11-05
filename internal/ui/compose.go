@@ -205,24 +205,38 @@ func pasteClipboard() tea.Cmd {
 	}
 }
 
-// sendAll sends the files, then the text (if any).
-func sendAll(conn connector.Connector, ctx context.Context, chat connector.Chat, text string, mentions []connector.Mention, files []connector.Attachment, reply *connector.ReplyRef) tea.Cmd {
+// sendAll sends the files, then the text (if any). If a file fails, the
+// text and the files not sent yet come back in sentMsg, so the draft can be
+// put back instead of lost.
+func sendAll(conn connector.Connector, ctx context.Context, chat connector.Chat, text string, mentions []connector.Mention, files []pendingFile, reply *connector.ReplyRef) tea.Cmd {
 	// files first, then the text (Messenger shows them as separate messages)
 	chatID := chat.ID
 	return func() tea.Msg {
 		conn.KnowChat(chat)
-		for _, f := range files {
+		for i, f := range files {
 			ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-			err := conn.SendFile(ctx, chatID, f)
+			err := conn.SendFile(ctx, chatID, f.file)
 			cancel()
 			if err != nil {
-				return sentMsg{fmt.Errorf("%s: %w", f.Name, err)}
+				back := make([]string, 0, len(files)-i+1)
+				for _, rest := range files[i:] {
+					back = append(back, rest.token)
+				}
+				if text != "" {
+					back = append(back, text)
+				}
+				return sentMsg{err: fmt.Errorf("%s: %w", f.file.Name, err), chatID: chatID,
+					restore: strings.Join(back, " "), restoreAtts: files[i:]}
 			}
 		}
 		if text == "" {
 			return sentMsg{}
 		}
-		return sentMsg{conn.Send(ctx, chatID, text, mentions, reply)}
+		// a failed send takes its "sending…" copy away, so put the text back
+		if err := conn.Send(ctx, chatID, text, mentions, reply); err != nil {
+			return sentMsg{err: err, chatID: chatID, restore: text}
+		}
+		return sentMsg{}
 	}
 }
 

@@ -99,6 +99,7 @@ type Model struct {
 	synced       map[string]bool // encrypted chats already filled from the PIN backup this run
 	refilling    map[string]bool // chats waiting to refill a message that couldn't be decrypted
 	askedName    map[string]bool // senders whose name we already asked Messenger for
+	checkAt      time.Time       // a redraw is due then, to flip "sending…" to "not sent"
 	reacting     bool            // reaction picker open
 	selecting    bool            // stepping through messages (react, photo); else typing
 
@@ -160,11 +161,17 @@ type (
 		img image.Image
 		err error
 	}
-	sentMsg       struct{ err error }
+	sentMsg struct {
+		err         error
+		chatID      string        // with restore: the chat whose draft comes back
+		restore     string        // the draft to put back after a failed file
+		restoreAtts []pendingFile // the files in it that weren't sent
+	}
 	toastMsg      struct{ text string }
 	clearToast    struct{}
 	olderDoneMsg  struct{ err error }
 	newestDoneMsg struct{ err error }
+	pendingCheck  struct{}
 	refillMsg     struct {
 		chatID  string
 		attempt int
@@ -281,10 +288,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case sentMsg:
-		if msg.err != nil {
-			return m, m.flash("send failed: " + msg.err.Error())
+		if msg.err == nil {
+			return m, nil
 		}
-		return m, nil
+		if msg.restore != "" {
+			m.restoreDraft(msg.chatID, msg.restore, msg.restoreAtts)
+			return m, m.flash("Not sent: " + sendError(msg.err) + ". Your message is back in the box.")
+		}
+		return m, m.flash("Not sent: " + sendError(msg.err))
+
+	case pendingCheck:
+		m.checkAt = time.Time{}
+		return m, m.reloadMessages()
 
 	case refillMsg:
 		return m, m.refill(msg.chatID, msg.attempt)
@@ -498,7 +513,7 @@ func (m *Model) reloadMessages() tea.Cmd {
 	m.msgs, _ = m.st.Messages(m.chat.ID, pageSize, m.conn.SelfID())
 	m.people, _ = m.st.People(m.chat.ID, m.conn.SelfID())
 	m.keepSelectionVisible()
-	lookup := m.lookupNames()
+	lookup := tea.Batch(m.lookupNames(), m.notSentTimer())
 	if !m.drawsPhotos() {
 		return lookup // photos show as "View photo": load them only when opened
 	}
@@ -512,6 +527,49 @@ func (m *Model) reloadMessages() tea.Cmd {
 		}
 	}
 	return tea.Batch(append(cmds, lookup)...)
+}
+
+// notSent: a message of yours Messenger never confirmed.
+func (m Model) notSent(msg store.MessageRow) bool {
+	return msg.FromMe && msg.Pending && time.Since(msg.Time) > notSentAfter
+}
+
+// retry sends a "not sent" message again: its old copy goes, a new one
+// shows as "sending…". Files can't be resent (tuon doesn't keep them).
+func (m Model) retry(msg store.MessageRow) (tea.Model, tea.Cmd) {
+	if msg.Text == "" {
+		return m, m.flash("Files can't be resent from here: delete it (d) and attach them again")
+	}
+	_ = m.st.RemoveMessage(msg.ID)
+	var reply *connector.ReplyRef
+	if msg.ReplyToID != "" {
+		reply = &connector.ReplyRef{ID: msg.ReplyToID}
+		for _, x := range m.msgs {
+			if x.ID == msg.ReplyToID {
+				reply.SenderID = x.SenderID
+			}
+		}
+	}
+	m.selecting, m.selID = false, ""
+	reload := m.reloadMessages()
+	send := sendAll(m.conn, m.ctx, m.chat.Chat, msg.Text, nil, nil, reply)
+	return m, tea.Batch(reload, send, m.compose.Focus(), m.flash("Sending again…"))
+}
+
+// notSentTimer wakes the UI when a message still sending passes 45 s, so
+// "not sent" shows even if nothing else happens on screen.
+func (m *Model) notSentTimer() tea.Cmd {
+	var due time.Time
+	for _, msg := range m.msgs {
+		if at := msg.Time.Add(notSentAfter + 100*time.Millisecond); msg.Pending && at.After(time.Now()) && (due.IsZero() || at.Before(due)) {
+			due = at
+		}
+	}
+	if due.IsZero() || (!m.checkAt.IsZero() && !due.Before(m.checkAt)) {
+		return nil
+	}
+	m.checkAt = due
+	return tea.Tick(time.Until(due), func(time.Time) tea.Msg { return pendingCheck{} })
 }
 
 // lookupNames asks Messenger, once per run, for the names of senders in
@@ -884,6 +942,39 @@ func (m Model) onComposeKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	m.updateSuggestions()
 	return m, cmd
+}
+
+// sendError says why a send failed in plain words; library text like
+// "dgw: socket is not open" means the connection is down.
+func sendError(err error) string {
+	s := err.Error()
+	low := strings.ToLower(s)
+	for _, offline := range []string{"socket is not open", "not connected", "websocket", "connection refused", "no such host", "network is unreachable", "i/o timeout", "context deadline exceeded"} {
+		if strings.Contains(low, offline) {
+			return "you're offline or Messenger isn't reachable"
+		}
+	}
+	return s
+}
+
+// restoreDraft puts an unsent message back: in the box if that chat is
+// open and the box is empty, else as the chat's draft (never over one).
+func (m *Model) restoreDraft(chatID, text string, files []pendingFile) {
+	for _, f := range files { // keep new [Image #n] numbers clear of these
+		var n int
+		if _, err := fmt.Sscanf(f.token[strings.LastIndex(f.token, "#")+1:], "%d", &n); err == nil {
+			m.attSeq = max(m.attSeq, n)
+		}
+	}
+	if m.chat != nil && m.chat.ID == chatID && m.compose.Value() == "" {
+		m.compose.SetValue(text)
+		m.compose.CursorEnd()
+		m.atts = files
+		return
+	}
+	if m.drafts[chatID] == "" {
+		m.drafts[chatID], m.draftAtts[chatID] = text, files
+	}
 }
 
 // leaveChat goes back to the list, keeping the draft.
@@ -1331,6 +1422,9 @@ func (m *Model) loadNewest() tea.Cmd {
 	}
 }
 
+// notSentAfter: a message Messenger hasn't confirmed by then shows "not sent".
+const notSentAfter = 45 * time.Second
+
 // refillAfter: when to look in the PIN backup again for a message that
 // couldn't be decrypted live. The phone has to back it up first, which
 // takes seconds to minutes. After the list runs out, every 5 minutes.
@@ -1402,7 +1496,10 @@ func (m Model) onSelectKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.compose.Focus()
 	}
 	switch k.String() {
-	case "enter": // reply to the selected message
+	case "enter": // reply to the selected message, or retry one that didn't send
+		if sel >= 0 && sel < len(m.msgs) && m.notSent(m.msgs[sel]) {
+			return m.retry(m.msgs[sel])
+		}
 		if sel >= 0 && sel < len(m.msgs) && !m.msgs[sel].Pending {
 			r := m.msgs[sel]
 			m.replyTo = &r
@@ -1435,6 +1532,13 @@ func (m Model) onSelectKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if sel >= 0 && sel < len(m.msgs) {
 			m.reacting = true
 		}
+	case "d", "x", "backspace", "delete": // drop a message that didn't send
+		if sel >= 0 && sel < len(m.msgs) && m.notSent(m.msgs[sel]) {
+			_ = m.st.RemoveMessage(m.msgs[sel].ID)
+			cmd := m.reloadMessages()
+			m.reloadChats()
+			return m, tea.Batch(cmd, m.flash("Deleted the unsent message"))
+		}
 	case "y", "c":
 		if sel >= 0 && sel < len(m.msgs) {
 			return m, copyText(m.messagesText(sel, sel), 1)
@@ -1446,6 +1550,11 @@ func (m Model) onSelectKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "?":
 		m.mode = modeHelp
 	case "o":
+		if sel >= 0 && sel < len(m.msgs) {
+			if md, ok := fileIn(m.msgs[sel]); ok {
+				return m, m.saveFile(md)
+			}
+		}
 		if sel >= 0 && sel < len(m.msgs) && !hasPhoto(m.msgs[sel]) {
 			for _, md := range m.msgs[sel].Media {
 				if md.Kind == connector.Link && md.URL != "" {
@@ -1497,7 +1606,10 @@ func (m Model) onMouse(e tea.MouseMsg) (tea.Model, tea.Cmd) {
 			if from != to { // dragged over several messages: copy them
 				return m, copyText(m.messagesText(from, to), to-from+1)
 			}
-			// a click: open its photo or link, or select the message
+			// a click: open its photo or link, save its file, or select the message
+			if md, ok := fileIn(m.msgs[from]); ok {
+				return m, m.saveFile(md)
+			}
 			for _, md := range m.msgs[from].Media {
 				if md.Kind == connector.Photo && md.Ref != "" {
 					return m, m.openPhoto(md)
@@ -1941,6 +2053,39 @@ func (m *Model) openPerson(p store.Person) tea.Cmd {
 	m.stopInput()
 	m.query, m.remote, m.found, m.personView = "", nil, nil, nil
 	return m.openChat(c)
+}
+
+// fileIn: the received file in a message, if any.
+func fileIn(msg store.MessageRow) (connector.Media, bool) {
+	for _, md := range msg.Media {
+		if md.Kind == connector.File {
+			return md, true
+		}
+	}
+	return connector.Media{}, false
+}
+
+// saveFile downloads a received file into Downloads and shows it in the
+// file manager. It is never opened or run: it came from someone else.
+func (m *Model) saveFile(md connector.Media) tea.Cmd {
+	if md.Ref == "" {
+		return m.flash("This file came in before tuon could fetch files. Open it on your phone.")
+	}
+	conn, ctx := m.conn, m.ctx
+	return tea.Batch(m.flash("Saving "+termSafe(safeFileName(md.Name))+"…"), func() tea.Msg {
+		ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+		defer cancel()
+		b, err := conn.FetchMedia(ctx, md)
+		if err != nil {
+			return toastMsg{"couldn't save the file: " + err.Error()}
+		}
+		path := uniquePath(filepath.Join(downloadsDir(), safeFileName(md.Name)))
+		if err := os.WriteFile(path, b, 0o600); err != nil {
+			return toastMsg{"couldn't save the file: " + err.Error()}
+		}
+		_ = revealFile(path)
+		return toastMsg{"Saved to " + shortHome(path)}
+	})
 }
 
 func hasPhoto(msg store.MessageRow) bool {

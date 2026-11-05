@@ -52,6 +52,13 @@ func loadLogin() (auth.Creds, error) {
 
 // login asks how to log in, then saves the session (never the password).
 func login() error {
+	// an open tuon saves its own session when it quits, which would
+	// overwrite this login: refuse while it runs
+	release, err := store.Lock()
+	if err != nil {
+		return err
+	}
+	defer release()
 	browser := auth.FindBrowser()
 	fmt.Print("\n  tuon · log in to Messenger\n\n")
 	def := "2"
@@ -66,10 +73,7 @@ func login() error {
 	if choice == "" {
 		choice = def
 	}
-	var (
-		creds auth.Creds
-		err   error
-	)
+	var creds auth.Creds
 	switch {
 	case choice == "1" && browser != "":
 		creds, err = browserLogin(browser)

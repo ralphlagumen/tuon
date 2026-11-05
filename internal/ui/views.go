@@ -188,6 +188,8 @@ func (m Model) footer() string {
 		return keyHints("enter", "send", "alt+enter", "new line", "@", "tag", "@~/", "attach", "ctrl+v", "paste image", "ctrl+o", "newest photo", "↑", "pick message", "esc", "chats")
 	case m.reacting:
 		return keyHints("1-6", "react", "x", "remove mine", "esc", "cancel")
+	case m.focus == focusChat && m.selecting && m.selIndex() >= 0 && m.selIndex() < len(m.msgs) && m.notSent(m.msgs[m.selIndex()]):
+		return keyHints("enter", "send again", "d", "delete", "↑↓", "pick", "esc", "back to typing")
 	case m.focus == focusChat && m.selecting:
 		return keyHints("↑↓", "pick", "enter", "reply", "r", "react", "y", "copy", "o", "open", "esc", "back to typing", "tab", "chat list")
 	default:
@@ -608,7 +610,7 @@ func (m Model) chatLines() ([]string, []span) {
 				rightCol = append(rightCol, chip)
 			}
 			switch {
-			case j == 0 && msg.Pending && time.Since(msg.Time) > 45*time.Second:
+			case j == 0 && msg.Pending && time.Since(msg.Time) > notSentAfter:
 				rightCol = append(rightCol, sErr.Render("not sent"))
 			case j == 0 && msg.Pending:
 				rightCol = append(rightCol, sMuted.Render("sending…"))
@@ -713,6 +715,18 @@ func (m Model) mediaLines(md connector.Media, maxW int) []string {
 		return m.linkCard(md, maxW)
 	}
 	tag := sTheirs.Render(" " + mediaLabel(md.Kind) + " ")
+	if md.Kind == connector.File {
+		name := md.Name
+		if name == "" {
+			name = "File"
+		}
+		hint := " · o to save"
+		if md.Ref == "" {
+			hint = " · on your phone"
+		}
+		return []string{sTheirs.Render(" ") + sAccent.Background(lipgloss.Color(cTheirs)).Render(ansi.Truncate("▸ "+termSafe(name), max(8, min(maxW-16, 48)), "…")) +
+			sTheirs.Render(" ") + sMuted.Render(hint)}
+	}
 	if md.Kind != connector.Photo || md.Ref == "" {
 		return []string{tag}
 	}
@@ -887,27 +901,43 @@ func (m Model) helpView() []string {
 	row := func(k1, d1, k2, d2 string) string {
 		return " " + fit(sDim.Render(d1), 11) + fit(sAccent.Render(k1), 13) + fit(sDim.Render(d2), 11) + sAccent.Render(k2)
 	}
+	cmd := func(c, d string) string { return "  " + fit(sAccent.Render(c), 24) + sDim.Render(d) }
+	head := func(t string) string { return " " + sDim.Render(t) }
 	out := []string{
 		" " + sAccentB.Render("tuon") + sDim.Render(" · keys"),
 		rule(m.w),
-		row("j/k ↑/↓", "move", "1 2 3", "spaces"),
-		row("enter", "open chat", "tab / esc", "switch pane"),
+		head("chat list"),
+		row("↑ ↓", "browse", "enter", "open"),
+		row("← → 1-9", "folders", "u", "unread"),
 		row("/", "search", "t", "move chat"),
-		row("f", "folders", "1-9 / ←→", "switch folder"),
-		row("i", "type", "enter", "send"),
-		row("@", "mention", "tab", "pick name"),
-		row("r", "react", "1-6 / x", "pick / remove"),
-		row("o", "photo", "O / s", "view / save"),
-		row("g / G", "top / end", "ctrl+u/d", "page"),
+		row("f", "edit folder", ":", "command"),
+		row("?", "this help", "q", "quit"),
 		"",
-		" " + sDim.Render("commands"),
-		"  " + sAccent.Render(":work :personal :inbox") + sDim.Render("   switch space"),
-		"  " + sAccent.Render(":mute") + sDim.Render("                    mute / unmute chat"),
-		"  " + sAccent.Render(":sound") + sDim.Render("                   new-message sound and volume"),
-		"  " + sAccent.Render(":images on|off") + sDim.Render("           photo previews"),
-		"  " + sAccent.Render(":quit") + sDim.Render("                    quit"),
+		head("in a chat"),
+		row("enter", "send", "alt+enter", "new line"),
+		row("@", "tag", "@~/", "attach"),
+		row("ctrl+v", "paste", "ctrl+o", "photo"),
+		row("↑", "pick msg", "esc", "back"),
 		"",
-		" " + sDim.Render("new chats land in inbox. tag them once with t, they stay put."),
+		head("picked message"),
+		row("enter", "reply", "r 1-6", "react"),
+		row("o", "open", "y", "copy"),
+		row("enter", "send again", "d", "delete") + sDim.Render("   (not sent)"),
+		"",
+		head("folders (f)"),
+		row("a", "add", "r", "rename"),
+		row("d", "delete", "m", "move"),
+		"",
+		head("commands"),
+		cmd(":mute", "mute or unmute the chat"),
+		cmd(":sound", "new-message sound and volume"),
+		cmd(":images on|off", "photos inside the chat"),
+		cmd(":quit", "quit"),
+		"",
+		head("new chats land in Inbox. Move them once with t; they stay put."),
+	}
+	if len(out) > m.h-2 { // a short window: cut, never push the footer off
+		out = out[:max(0, m.h-2)]
 	}
 	for len(out) < m.h-2 {
 		out = append(out, "")

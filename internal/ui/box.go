@@ -109,12 +109,12 @@ var tokenRe = regexp.MustCompile(`\[(Image|File) #\d+\]`)
 
 // splitDraft: the files whose tokens are still in the text (in text order),
 // and the text without the tokens. Deleting a token drops its file.
-func splitDraft(text string, files []pendingFile) (string, []connector.Attachment) {
-	var out []connector.Attachment
+func splitDraft(text string, files []pendingFile) (string, []pendingFile) {
+	var out []pendingFile
 	for _, tok := range tokenRe.FindAllString(text, -1) {
 		for _, f := range files {
 			if f.token == tok {
-				out = append(out, f.file)
+				out = append(out, f)
 			}
 		}
 	}

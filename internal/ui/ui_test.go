@@ -33,6 +33,9 @@ type fakeConn struct {
 	directory []connector.Person // what SearchPeople finds
 	opened    []string
 	looked    []string
+	failFile  string // SendFile fails for this name
+	failSend  bool   // Send fails
+	media     []byte // what FetchMedia returns
 	files     []connector.Attachment
 	sent      []sent
 	reacted   []reacted
@@ -45,6 +48,9 @@ func (f *fakeConn) LoadOlder(context.Context, string, time.Time, string) error {
 	return nil
 }
 func (f *fakeConn) Send(_ context.Context, _ string, text string, ms []connector.Mention, reply *connector.ReplyRef) error {
+	if f.failSend {
+		return errors.New("network down")
+	}
 	f.sent = append(f.sent, sent{text, ms, reply})
 	return nil
 }
@@ -64,6 +70,9 @@ func (f *fakeConn) OpenDirect(_ context.Context, userID string) (string, error) 
 	return userID, nil
 }
 func (f *fakeConn) SendFile(_ context.Context, _ string, a connector.Attachment) error {
+	if a.Name == f.failFile {
+		return errors.New("upload rejected")
+	}
 	f.files = append(f.files, a)
 	return nil
 }
@@ -71,7 +80,7 @@ func (f *fakeConn) React(_ context.Context, chat, msg, sender, emoji string) err
 	f.reacted = append(f.reacted, reacted{chat, msg, sender, emoji})
 	return nil
 }
-func (f *fakeConn) FetchMedia(context.Context, connector.Media) ([]byte, error) { return nil, nil }
+func (f *fakeConn) FetchMedia(context.Context, connector.Media) ([]byte, error) { return f.media, nil }
 func (f *fakeConn) Close()                                                      {}
 
 func newTestModel(t *testing.T, w, h int) (Model, *store.Store, *fakeConn) {
@@ -1005,5 +1014,169 @@ func TestPlaceholdersRetriedAtStart(t *testing.T) {
 	// checks keep going well past the first few, then stop
 	if got := refillAfter[min(maxRefills-1, len(refillAfter)-1)]; got != 5*time.Minute {
 		t.Fatalf("late checks every %v, want 5m", got)
+	}
+}
+
+func TestFailedFileKeepsDraft(t *testing.T) {
+	m, st, fc := newTestModel(t, 120, 30)
+	fc.failFile = "big.zip"
+	now := time.Now()
+	_ = st.UpsertChat(connector.Chat{ID: "c1", Name: "Test", LastActivity: now})
+	m.reloadChats()
+	c, _ := st.Chat("c1")
+	m = run(m, m.openChat(c))
+	next, _ := m.Update(attachedMsg{files: []connector.Attachment{
+		{Name: "a.png", Mime: "image/png", Data: []byte("x")},
+		{Name: "big.zip", Mime: "application/zip", Data: []byte("y")},
+	}})
+	m = typeText(next.(Model), "here you go")
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = run(next.(Model), cmd)
+	if len(fc.files) != 1 || fc.files[0].Name != "a.png" || len(fc.sent) != 0 {
+		t.Fatalf("files=%v sent=%v", fc.files, fc.sent)
+	}
+	if v := m.compose.Value(); !strings.Contains(v, "[File #2]") || !strings.Contains(v, "here you go") || strings.Contains(v, "#1") {
+		t.Fatalf("draft not restored: %q", v)
+	}
+	if len(m.atts) != 1 || m.atts[0].file.Name != "big.zip" {
+		t.Fatalf("atts = %+v", m.atts)
+	}
+	// (run also fires the toast's clear timer, so check the message directly)
+	if nm, _ := m.Update(sentMsg{err: errors.New("x"), chatID: "c9", restore: "y"}); !strings.Contains(nm.(Model).toast, "back in the box") {
+		t.Fatalf("toast = %q", nm.(Model).toast)
+	}
+	// sending again sends the rest
+	fc.failFile = ""
+	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	_ = run(next.(Model), cmd)
+	if len(fc.files) != 2 || len(fc.sent) != 1 || fc.sent[0].text != "here you go" {
+		t.Fatalf("resend: files=%d sent=%+v", len(fc.files), fc.sent)
+	}
+}
+
+func TestNotSentShowsWithoutInput(t *testing.T) {
+	m, st, _ := newTestModel(t, 120, 30)
+	_ = st.UpsertChat(connector.Chat{ID: "c1", Name: "Test", LastActivity: time.Now()})
+	_, _ = st.AddMessage(connector.Message{ID: "pending:1", ChatID: "c1", SenderID: "1", FromMe: true, Pending: true,
+		Text: "hello", Time: time.Now().Add(-44 * time.Second)}, false)
+	m.reloadChats()
+	c, _ := st.Chat("c1")
+	cmd := m.openChat(c)
+	if m.checkAt.IsZero() || time.Until(m.checkAt) > 2*time.Second {
+		t.Fatalf("no timer for the pending message (checkAt %v)", m.checkAt)
+	}
+	if strings.Contains(screen(m), "not sent") {
+		t.Fatal("too early for not sent")
+	}
+	m = run(m, cmd) // the timer fires: no key pressed
+	if !strings.Contains(screen(m), "not sent") {
+		t.Fatalf("not sent missing after the timer:\n%s", screen(m))
+	}
+}
+
+func TestUnsentMessages(t *testing.T) {
+	m, st, fc := newTestModel(t, 140, 30)
+	_ = st.UpsertChat(connector.Chat{ID: "c1", Name: "Test", LastActivity: time.Now()})
+	m.reloadChats()
+	c, _ := st.Chat("c1")
+	m = run(m, m.openChat(c))
+
+	// a send that fails outright: the text comes back
+	fc.failSend = true
+	m = typeText(m, "are you there")
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = run(next.(Model), cmd)
+	if m.compose.Value() != "are you there" {
+		t.Fatalf("text not restored: %q", m.compose.Value())
+	}
+	fc.failSend = false
+	m.compose.SetValue("")
+
+	// one stuck on "not sent": retry it
+	_, _ = st.AddMessage(connector.Message{ID: "pending:7", ChatID: "c1", SenderID: "1", FromMe: true, Pending: true,
+		Text: "hello?", Time: time.Now().Add(-time.Minute)}, false)
+	_ = m.reloadMessages()
+	m = key(m, "up") // select it
+	if s := screen(m); !strings.Contains(s, "send again") || !strings.Contains(s, "not sent") {
+		t.Fatalf("no retry hint:\n%s", s)
+	}
+	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = run(next.(Model), cmd)
+	if len(fc.sent) != 1 || fc.sent[0].text != "hello?" {
+		t.Fatalf("retry sent %+v", fc.sent)
+	}
+	if strings.Contains(screen(m), "not sent") {
+		t.Fatal("old copy still there")
+	}
+
+	// another: delete it
+	_, _ = st.AddMessage(connector.Message{ID: "pending:8", ChatID: "c1", SenderID: "1", FromMe: true, Pending: true,
+		Text: "nvm", Time: time.Now().Add(-time.Minute)}, false)
+	_ = m.reloadMessages()
+	m = key(m, "up")
+	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	m = run(next.(Model), cmd)
+	if strings.Contains(screen(m), "nvm") || len(fc.sent) != 1 {
+		t.Fatalf("delete failed:\n%s", screen(m))
+	}
+}
+
+func TestSafeFileName(t *testing.T) {
+	for in, want := range map[string]string{
+		"report.pdf":       "report.pdf",
+		"../../etc/passwd": "_.._etc_passwd",
+		".hidden":          "hidden",
+		"-rf":              "rf",
+		"a\x1b[31mred.txt": "a[31mred.txt",
+		"":                 "file",
+		"photo‮gpj.exe":    "photogpj.exe",
+	} {
+		if got := safeFileName(in); got != want {
+			t.Errorf("safeFileName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestReceivedFileSaves(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	_ = os.MkdirAll(filepath.Join(dir, "Downloads"), 0o700)
+	var revealed string
+	revealFile = func(p string) error { revealed = p; return nil }
+	defer func() { revealFile = func(string) error { return nil } }()
+
+	m, st, fc := newTestModel(t, 120, 30)
+	fc.media = []byte("zipdata")
+	now := time.Now()
+	_ = st.UpsertChat(connector.Chat{ID: "c1", Name: "Raine", LastActivity: now, Encrypted: true})
+	_, _ = st.AddMessage(connector.Message{ID: "f1", ChatID: "c1", SenderID: "2", Time: now,
+		Media: []connector.Media{{Kind: connector.File, Name: "tuon.zip", Ref: "wa:doc:x"}}}, false)
+	m.reloadChats()
+	c, _ := st.Chat("c1")
+	m = run(m, m.openChat(c))
+	if s := screen(m); !strings.Contains(s, "tuon.zip") || !strings.Contains(s, "to save") {
+		t.Fatalf("file row:\n%s", s)
+	}
+	m = key(m, "up")
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+	_ = run(next.(Model), cmd)
+	want := filepath.Join(dir, "Downloads", "tuon.zip")
+	if b, err := os.ReadFile(want); err != nil || string(b) != "zipdata" || revealed != want {
+		t.Fatalf("saved %q (%v), revealed %q", b, err, revealed)
+	}
+	// a second save never overwrites
+	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+	_ = run(next.(Model), cmd)
+	if _, err := os.Stat(filepath.Join(dir, "Downloads", "tuon (2).zip")); err != nil {
+		t.Fatal("second save should be tuon (2).zip")
+	}
+}
+
+func TestSendErrorWording(t *testing.T) {
+	if got := sendError(errors.New("dgw: socket is not open")); got != "you're offline or Messenger isn't reachable" {
+		t.Fatalf("got %q", got)
+	}
+	if got := sendError(errors.New("big.zip: upload rejected")); got != "big.zip: upload rejected" {
+		t.Fatalf("got %q", got)
 	}
 }

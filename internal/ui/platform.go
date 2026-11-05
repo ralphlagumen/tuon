@@ -13,6 +13,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/ralph/tuon/internal/connector"
 )
 
 // Everything that talks to the operating system (clipboard, sound, opening
@@ -218,6 +220,52 @@ func tempPhoto(b []byte) (string, error) {
 	}
 	path := filepath.Join(dir, "Photo "+time.Now().Format("2006-01-02 15.04.05.000")+extFor(b))
 	return path, os.WriteFile(path, b, 0o600)
+}
+
+// safeFileName makes a sender's file name safe to save: no folders, no
+// hidden or dash-leading names, no control characters, a sane length.
+func safeFileName(name string) string {
+	name = connector.SafeText(name, false)
+	name = strings.NewReplacer("/", "_", "\\", "_", ":", "_").Replace(name)
+	name = strings.TrimLeft(strings.TrimSpace(name), ".-")
+	if r := []rune(name); len(r) > 120 {
+		ext := filepath.Ext(name)
+		if len([]rune(ext)) > 10 {
+			ext = ""
+		}
+		name = string(r[:120-len([]rune(ext))]) + ext
+	}
+	if name == "" {
+		name = "file"
+	}
+	return name
+}
+
+// uniquePath adds " (2)", " (3)"… so a save never overwrites a file.
+func uniquePath(p string) string {
+	if _, err := os.Stat(p); os.IsNotExist(err) {
+		return p
+	}
+	ext := filepath.Ext(p)
+	base := strings.TrimSuffix(p, ext)
+	for i := 2; ; i++ {
+		q := fmt.Sprintf("%s (%d)%s", base, i, ext)
+		if _, err := os.Stat(q); os.IsNotExist(err) {
+			return q
+		}
+	}
+}
+
+// revealFile shows a saved file in the file manager without opening it.
+var revealFile = func(path string) error {
+	switch runtime.GOOS {
+	case "darwin":
+		return exec.Command("open", "-R", path).Start()
+	case "windows":
+		return exec.Command("explorer", "/select,"+path).Start()
+	default:
+		return exec.Command("xdg-open", filepath.Dir(path)).Start()
+	}
 }
 
 func downloadsDir() string {

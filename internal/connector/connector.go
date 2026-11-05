@@ -39,6 +39,8 @@ type Media struct {
 	// Ref is opaque to everything but the connector that made it
 	// (a URL for plain chats, encoded keys for encrypted ones).
 	Ref string `json:",omitempty"`
+	// Name: a file's name, as the sender gave it (untrusted).
+	Name string `json:",omitempty"`
 	// For links: what the card says and where it goes.
 	Title  string `json:",omitempty"`
 	Source string `json:",omitempty"`

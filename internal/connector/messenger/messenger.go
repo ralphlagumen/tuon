@@ -53,6 +53,7 @@ import (
 const (
 	maxThreadPages = 10
 	waImagePrefix  = "wa:image:"
+	waDocPrefix    = "wa:doc:"
 )
 
 type Conn struct {
@@ -284,6 +285,9 @@ func (c *Conn) handleTable(tbl *table.LSTable) {
 	for _, a := range tbl.LSInsertBlobAttachment {
 		// the full-size file, like the bridge uses; the preview is small and blurry
 		m := connector.Media{Kind: kindOf(a.AttachmentType), Ref: a.PlayableUrl}
+		if m.Kind == connector.File {
+			m.Name = clean(a.Filename)
+		}
 		if m.Ref == "" {
 			m.Ref = a.PreviewUrl
 		}
@@ -627,7 +631,14 @@ func waContent(c *waConsumerApplication.ConsumerApplication_Content) (string, []
 	case c.GetAudioMessage() != nil:
 		return "", []connector.Media{{Kind: connector.Voice}}
 	case c.GetDocumentMessage() != nil:
-		return "", []connector.Media{{Kind: connector.File}}
+		doc := c.GetDocumentMessage()
+		m := connector.Media{Kind: connector.File, Name: connector.SafeText(doc.GetFileName(), false)}
+		if dec, err := doc.Decode(); err == nil {
+			if b, err := proto.Marshal(dec.GetIntegral().GetTransport()); err == nil {
+				m.Ref = waDocPrefix + base64.StdEncoding.EncodeToString(b)
+			}
+		}
+		return "", []connector.Media{m}
 	case c.GetStickerMessage() != nil:
 		return "", []connector.Media{{Kind: connector.Sticker}}
 	}
@@ -1101,7 +1112,7 @@ func (c *Conn) FetchMedia(ctx context.Context, m connector.Media) ([]byte, error
 	if m.Ref == "" {
 		return nil, errors.New("no media to fetch")
 	}
-	if strings.HasPrefix(m.Ref, waImagePrefix) {
+	if prefix, kind, ok := waMedia(m.Ref); ok {
 		c.mu.Lock()
 		wa := c.wa
 		c.mu.Unlock()
@@ -1109,7 +1120,7 @@ func (c *Conn) FetchMedia(ctx context.Context, m connector.Media) ([]byte, error
 		if wa, err = c.readyWA(ctx, wa); err != nil {
 			return nil, err
 		}
-		b, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(m.Ref, waImagePrefix))
+		b, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(m.Ref, prefix))
 		if err != nil {
 			return nil, err
 		}
@@ -1117,7 +1128,10 @@ func (c *Conn) FetchMedia(ctx context.Context, m connector.Media) ([]byte, error
 		if err := proto.Unmarshal(b, &t); err != nil {
 			return nil, err
 		}
-		return wa.DownloadFB(ctx, t.GetIntegral(), whatsmeow.MediaImage)
+		if size := t.GetAncillary().GetFileLength(); size > maxDownload(m.Kind) {
+			return nil, fmt.Errorf("it's %s, over tuon's %s limit: open it on your phone", mb(int64(size)), mb(int64(maxDownload(m.Kind))))
+		}
+		return wa.DownloadFB(ctx, t.GetIntegral(), kind)
 	}
 	if err := checkMediaURL(m.Ref); err != nil {
 		return nil, err
@@ -1134,8 +1148,38 @@ func (c *Conn) FetchMedia(ctx context.Context, m connector.Media) ([]byte, error
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("media: HTTP %d (link may have expired)", resp.StatusCode)
 	}
-	return io.ReadAll(io.LimitReader(resp.Body, 25<<20))
+	limit := int64(maxDownload(m.Kind))
+	b, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(b)) > limit { // refuse, never hand back a cut-off file
+		return nil, fmt.Errorf("it's over tuon's %s limit: open it on your phone", mb(limit))
+	}
+	return b, nil
 }
+
+// waMedia: the prefix and whatsmeow media type of an encrypted media ref.
+func waMedia(ref string) (prefix string, kind whatsmeow.MediaType, ok bool) {
+	switch {
+	case strings.HasPrefix(ref, waImagePrefix):
+		return waImagePrefix, whatsmeow.MediaImage, true
+	case strings.HasPrefix(ref, waDocPrefix):
+		return waDocPrefix, whatsmeow.MediaDocument, true
+	}
+	return "", "", false
+}
+
+// maxDownload: photos stay small (SECURITY.md promises 25 MB); files may be
+// bigger, but never unbounded.
+func maxDownload(k connector.MediaKind) uint64 {
+	if k == connector.File {
+		return 100 << 20
+	}
+	return 25 << 20
+}
+
+func mb(n int64) string { return fmt.Sprintf("%d MB", n>>20) }
 
 // mediaHTTP downloads photos: bounded time, and redirects must stay on
 // Meta's https media hosts.
