@@ -111,6 +111,14 @@ func history() error {
 			fmt.Println("  Skipped. Run `tuon history` any time.")
 			return nil
 		}
+		// keep just the digits: a pasted PIN can carry invisible paste
+		// markers, and people type "12 34 56" or "123-456"
+		if digits := pinDigits(pin); len(digits) != 6 {
+			fmt.Printf("  That wasn't 6 digits (got %d characters, %d of them digits). Try again; nothing was sent.\n", len([]rune(pin)), len(digits))
+			continue
+		} else {
+			pin = digits
+		}
 		err = conn.RestoreHistory(ctx, pin)
 		pin = ""
 		var wrong *messenger.AttemptsError
@@ -128,6 +136,19 @@ func history() error {
 			return err
 		}
 	}
+}
+
+// pinDigits drops everything but 0-9, including terminal paste markers
+// ("ESC[200~" … "ESC[201~"), whose own digits must not count.
+func pinDigits(s string) string {
+	s = strings.NewReplacer("\x1b[200~", "", "\x1b[201~", "").Replace(s)
+	var b strings.Builder
+	for _, r := range s {
+		if r >= '0' && r <= '9' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // keep saves what arrives while `tuon history` runs.
@@ -172,6 +193,10 @@ func setup() error {
 		}
 		fmt.Fprintln(os.Stderr, "  Couldn't restore history:", err)
 		fmt.Println("  You can still use tuon. Try `tuon history` later.")
+		if term.IsTerminal(int(os.Stdin.Fd())) { // don't let tuon's screen cover this
+			fmt.Print("  Press enter to continue.")
+			readLine()
+		}
 	}
 	return nil
 }

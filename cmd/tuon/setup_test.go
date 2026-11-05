@@ -45,3 +45,17 @@ func TestSwitchAccountClearsData(t *testing.T) {
 		t.Fatal("old account's database still there")
 	}
 }
+
+func TestPinDigits(t *testing.T) {
+	for in, want := range map[string]string{
+		"123456":                   "123456",
+		"12 34 56":                 "123456",
+		"123-456":                  "123456",
+		"\x1b[200~123456\x1b[201~": "123456",
+		"12345":                    "12345",
+	} {
+		if got := pinDigits(in); got != want {
+			t.Errorf("pinDigits(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
