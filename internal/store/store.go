@@ -119,6 +119,10 @@ CREATE TABLE IF NOT EXISTS tuon_alias (
 CREATE TABLE IF NOT EXISTS tuon_settings (
 	k TEXT PRIMARY KEY,
 	v TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS tuon_drafts (
+	chat_id TEXT PRIMARY KEY,
+	text    TEXT NOT NULL
 );`
 
 // Dir is ~/.config/tuon.
@@ -327,8 +331,8 @@ func (s *Store) Chats(space Space, query string) ([]ChatRow, error) {
 FROM tuon_chats c LEFT JOIN tuon_contacts ct ON ct.id = c.id
 WHERE c.last_ts > 0
 	AND (? <> '' OR c.space = ? OR (? AND c.unread = 1 AND c.muted = 0))  -- searching looks everywhere
-	AND (? = '' OR COALESCE(NULLIF(c.name, ''), ct.name, c.id) LIKE '%' || ? || '%')
-ORDER BY c.last_ts DESC`, query, string(space), space == Unread, query, query)
+	AND (? = '' OR COALESCE(NULLIF(c.name, ''), ct.name, c.id) LIKE '%' || ? || '%' ESCAPE '\')
+ORDER BY c.last_ts DESC`, query, string(space), space == Unread, query, likeText(query))
 	if err != nil {
 		return nil, err
 	}
@@ -555,6 +559,44 @@ func (s *Store) Prune(keep int) error {
 	return err
 }
 
+// Drafts returns the unsent text saved per chat.
+func (s *Store) Drafts() map[string]string {
+	out := map[string]string{}
+	rows, err := s.DB.Query(`SELECT chat_id, text FROM tuon_drafts`)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, text string
+		if rows.Scan(&id, &text) == nil {
+			out[id] = text
+		}
+	}
+	return out
+}
+
+// SaveDrafts replaces the saved drafts (text only; files aren't kept).
+func (s *Store) SaveDrafts(drafts map[string]string) error {
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM tuon_drafts`); err != nil {
+		return err
+	}
+	for id, text := range drafts {
+		if strings.TrimSpace(text) == "" {
+			continue
+		}
+		if _, err := tx.Exec(`INSERT INTO tuon_drafts (chat_id, text) VALUES (?, ?)`, id, text); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 // SettingAccount: the Messenger user ID this data belongs to.
 const SettingAccount = "account"
 
@@ -570,6 +612,23 @@ func (s *Store) Account() string {
 		return jid[:i]
 	}
 	return ""
+}
+
+// Compact gives back disk space once a quarter of the file is free pages
+// (deleted messages); SQLite otherwise keeps the file at its biggest size.
+func (s *Store) Compact() (bool, error) {
+	var pages, free int64
+	if err := s.DB.QueryRow(`PRAGMA page_count`).Scan(&pages); err != nil {
+		return false, err
+	}
+	if err := s.DB.QueryRow(`PRAGMA freelist_count`).Scan(&free); err != nil {
+		return false, err
+	}
+	if pages == 0 || free*4 < pages {
+		return false, nil
+	}
+	_, err := s.DB.Exec(`VACUUM`)
+	return err == nil, err
 }
 
 func (s *Store) Setting(k, def string) string {
@@ -654,11 +713,23 @@ func (s *Store) RenameSpace(old Space, name string) (Space, error) {
 	if err != nil {
 		return "", err
 	}
-	if _, err := s.DB.Exec(`UPDATE tuon_spaces SET name = ? WHERE name = ?`, name, string(old)); err != nil {
+	// one step: the folder and its chats move together, or neither does
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(`UPDATE tuon_spaces SET name = ? WHERE name = ?`, name, string(old))
+	if err != nil {
 		return "", fmt.Errorf("there's already a folder called %q", name)
 	}
-	_, err = s.DB.Exec(`UPDATE tuon_chats SET space = ? WHERE space = ?`, name, string(old))
-	return Space(name), err
+	if n, _ := res.RowsAffected(); n == 0 {
+		return "", fmt.Errorf("there's no folder called %q", string(old))
+	}
+	if _, err := tx.Exec(`UPDATE tuon_chats SET space = ? WHERE space = ?`, name, string(old)); err != nil {
+		return "", err
+	}
+	return Space(name), tx.Commit()
 }
 
 // DeleteSpace removes a folder; its chats go back to Inbox.
@@ -713,10 +784,15 @@ func (s *Store) SpaceCounts() map[Space]int {
 	return out
 }
 
+// likeText escapes LIKE's wildcards, so "a_b" or "50%" match literally.
+func likeText(q string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(q)
+}
+
 // SearchContacts finds people by name (not you).
 func (s *Store) SearchContacts(query string, limit int) []Person {
 	rows, err := s.DB.Query(`SELECT id, name FROM tuon_contacts
-WHERE id <> ? AND name LIKE '%' || ? || '%' ORDER BY name LIMIT ?`, s.Self, query, limit)
+WHERE id <> ? AND name LIKE '%' || ? || '%' ESCAPE '\' ORDER BY name LIMIT ?`, s.Self, likeText(query), limit)
 	if err != nil {
 		return nil
 	}

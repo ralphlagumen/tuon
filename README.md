@@ -19,7 +19,7 @@
   <img src="docs/img/screen-chat.svg" alt="tuon: the chat list on the left, a group chat on the right, with a reply being written">
 </p>
 
-Messenger's apps are heavy and built to keep you scrolling. Tuon keeps only the conversations: no feed, stories, ads or suggestions. It runs in a terminal window, uses about 39 MB of memory, and sorts your chats into folders like Work and Personal, so family and work stay apart.
+Messenger's apps are heavy and built to keep you scrolling. Tuon keeps only the conversations: no feed, stories, ads or suggestions. It runs in a terminal window, uses about 40 MB of memory, and sorts your chats into folders like Work and Personal, so family and work stay apart.
 
 It's a personal tool that talks to Messenger the unofficial way. Read [Before you use it](#before-you-use-it) first.
 
@@ -28,6 +28,7 @@ It's a personal tool that talks to Messenger the unofficial way. Read [Before yo
 - **Folders** you name and order yourself. New chats land in Inbox until you file them, and an **Unread** tab gathers every unread chat in one place.
 - **Encrypted 1:1 and group chats**, sending and receiving, including replies, @mentions, reactions and files.
 - **Real photos** in Ghostty, kitty and WezTerm. Other terminals show a `View photo` button that opens the photo in your viewer, with several photos opening as a gallery.
+- **Files** people send you save to your Downloads folder with one key. Tuon never opens or runs them.
 - **Keyboard first**, with the mouse working too: click a chat to open it, click a photo to view it, drag over messages to copy them.
 - **Quiet by default.** One soft sound for new messages, which you can change or turn off, and no "seen" receipts sent back.
 
@@ -72,7 +73,7 @@ The browser window uses a separate, temporary profile, so your usual browser and
 
 Encrypted chats start empty on a new device. Setup asks for your 6-digit Messenger PIN to load their older messages; you can skip it and run `tuon history` later, with Tuon closed.
 
-When Messenger logs you out, Tuon asks you to log in again on its next start. `tuon logout` forgets your session on this computer, and `tuon logout --wipe` also deletes your chats, folders and encryption keys.
+When Messenger logs you out, Tuon asks you to log in again right away. `tuon logout` forgets your session on this computer, and `tuon logout --wipe` also deletes your chats, folders and encryption keys.
 
 ## Use it
 
@@ -106,7 +107,7 @@ The chat list is on the left and the open chat on the right. Press `?` in Tuon f
 | `ctrl+v` | Paste an image, or a file copied in Finder |
 | `ctrl+o` | Open the newest photo |
 | `↑` on an empty box | Step into the messages |
-| `esc` | Back to the chat list, keeping your draft |
+| `esc` | Back to the chat list, keeping your draft (drafts are kept when you quit too) |
 
 With a message selected:
 
@@ -114,12 +115,13 @@ With a message selected:
 |---|---|
 | `enter` | Reply to it |
 | `r`, then `1`–`6` | React ❤ 😆 😮 😢 😠 👍 (the same key again removes it) |
-| `o` | Open its photo or link |
+| `o` | Open its photo or link, or save its file to Downloads |
 | `y` | Copy it |
+| `enter` / `d` on a "not sent" message | Send it again / delete it |
 
 </details>
 
-Attached files appear in your text as `[Image #1]` or `[File #2]`. Delete the token to drop the file. Your message shows right away as "sending…", and as "not sent" if Messenger hasn't confirmed it after 45 seconds.
+Attached files appear in your text as `[Image #1]` or `[File #2]`. Delete the token to drop the file. Your message shows right away as "sending…", and as "not sent" if Messenger hasn't confirmed it after 45 seconds. If sending fails, your text (and any files not sent) go back in the box.
 
 Type `:` in the chat list for commands: `:mute`, `:sound` (pick the new-message sound and volume), `:images off`, `:quit`.
 
@@ -129,13 +131,13 @@ Type `:` in the chat list for commands: `:mute`, `:sound` (pick the new-message 
 
 | Measure | tuon |
 |---|---|
-| Memory, idle after sync | 39 MB |
-| CPU, idle | 0.1% |
-| Redraws while idle | none |
+| Memory, idle after sync | 30 MB (42 MB resident) |
+| CPU, idle | under 1% |
+| Redraws while idle | none, apart from a backup check every few minutes while an encrypted message is still loading |
 | Photos downloaded when opening a chat in Terminal.app | 0 (on click) |
-| Program size | 27 MB, one file |
+| Program size | 29 MB, one file |
 
-Measured on an M-series Mac on 2026-11-05, with the same account, after the first sync. The Chrome figure adds up every Chrome process for one messenger.com tab, left idle for 30 seconds.
+Measured on an M-series Mac on 2026-11-05, with the same account, after the first sync (memory with macOS `footprint`, CPU with `top`). The Chrome figure adds up every Chrome process for one messenger.com tab, left idle for 30 seconds.
 
 ## How it works
 
@@ -160,15 +162,16 @@ The **connector** speaks Messenger's protocol through [mautrix-meta](https://git
 - Older encrypted messages need your Messenger PIN: run `tuon history` once (with Tuon closed). Tuon uses the PIN to join Messenger's encrypted backup and doesn't keep it. Messenger allows only a few wrong tries.
 - Read state isn't sent back to Messenger, so your phone still shows chats you read in Tuon as unread.
 - Videos and voice messages show as tags. Open them on your phone.
+- Encrypted messages that fail to decrypt show as "loading from your backup" until your phone backs them up, usually within minutes.
 
 ## Files
 
 | Where | What |
 |---|---|
 | System keychain, item "tuon" | Your session (or `~/.config/tuon/login.json`, owner-only, if there's no keychain) |
-| `~/.config/tuon/tuon.db` | Chats, folders, the newest 1,000 messages per chat, encryption keys |
+| `~/.config/tuon/tuon.db` | Chats, folders, drafts, the newest 1,000 messages per chat, encryption keys |
 | `~/.config/tuon/tuon.log` | Warnings and errors; starts over past 5 MB |
-| `~/.config/tuon/cache/img/` | Photo cache; photos unused for 2 weeks are removed, capped at 100 MB |
+| `~/.config/tuon/cache/img/` | Photo cache for Ghostty, kitty and WezTerm; photos unused for 2 weeks are removed, capped at 100 MB |
 
 Everything in `~/.config/tuon` is readable only by you.
 

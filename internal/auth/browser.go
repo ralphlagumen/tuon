@@ -73,7 +73,7 @@ func BrowserLogin(ctx context.Context, browser string) (Creds, error) {
 		"--no-first-run", "--no-default-browser-check", "--disable-sync",
 		"--window-size=760,860",
 		// a normal window with the address bar, so you can see you're on
-		// https://www.messenger.com before typing anything
+		// https://www.facebook.com before typing anything
 		"--new-window", loginURL,
 	)
 	if err := cmd.Start(); err != nil {

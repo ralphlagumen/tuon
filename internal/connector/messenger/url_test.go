@@ -1,6 +1,11 @@
 package messenger
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"github.com/ralph/tuon/internal/connector"
+)
 
 func TestCleanURL(t *testing.T) {
 	cases := map[string]string{
@@ -35,5 +40,17 @@ func TestMediaOnlyFromMeta(t *testing.T) {
 		if err := checkMediaURL(bad); err == nil {
 			t.Errorf("%s should be refused", bad)
 		}
+	}
+}
+
+func TestDownloadsAreCappedNotCut(t *testing.T) {
+	if _, err := readCapped(strings.NewReader(strings.Repeat("x", 11)), 10); err == nil {
+		t.Fatal("11 bytes over a 10 byte cap should be refused")
+	}
+	if b, err := readCapped(strings.NewReader(strings.Repeat("x", 10)), 10); err != nil || len(b) != 10 {
+		t.Fatalf("exactly the cap: %d bytes, %v", len(b), err)
+	}
+	if maxDownload(connector.Photo) != 25<<20 || maxDownload(connector.File) != 100<<20 {
+		t.Fatal("limits changed")
 	}
 }

@@ -202,15 +202,25 @@ func (m Model) footer() string {
 // tabs: "Unread ⟨5⟩   Favorite   Work ⟨2⟩   Inbox". The current tab is
 // amber; unread counts are small amber pills. Keys live in the footer
 // (1-9, u, ←→), so the tabs stay clean.
-func (m Model) tabs() string {
+func (m Model) tabs() string { s, _ := m.tabLayout(); return s }
+
+// tabSpan: where a tab sits on the tab row (cells, end exclusive).
+type tabSpan struct {
+	sp       store.Space
+	from, to int
+}
+
+// tabLayout renders the tab row and says where each tab is, for clicks.
+func (m Model) tabLayout() (string, []tabSpan) {
 	type tab struct {
+		sp      store.Space
 		name    string
 		n       int
 		current bool
 	}
 	var tabs []tab
 	for _, sp := range m.tabSpaces() {
-		t := tab{name: store.Label(sp), n: m.counts[sp], current: sp == m.space}
+		t := tab{sp: sp, name: store.Label(sp), n: m.counts[sp], current: sp == m.space}
 		if sp == store.Unread {
 			t.n = m.unreadTotal()
 		}
@@ -230,16 +240,25 @@ func (m Model) tabs() string {
 		}
 		return out
 	}
-	build := func(sep string, nameW int) string {
+	build := func(sep string, nameW int) (string, []tabSpan) {
 		var parts []string
+		var spans []tabSpan
+		x := 1
 		for _, t := range tabs {
-			parts = append(parts, render(t, nameW))
+			r := render(t, nameW)
+			w := ansi.StringWidth(r)
+			spans = append(spans, tabSpan{t.sp, x, x + w})
+			x += w + len(sep)
+			parts = append(parts, r)
 		}
-		return " " + strings.Join(parts, sep)
+		return " " + strings.Join(parts, sep), spans
 	}
-	for _, try := range []string{build("    ", 0), build("   ", 0), build("  ", 0), build("  ", 6), build(" ", 4)} {
-		if ansi.StringWidth(try) <= m.leftWidth() {
-			return try
+	for _, try := range []struct {
+		sep string
+		w   int
+	}{{"    ", 0}, {"   ", 0}, {"  ", 0}, {"  ", 6}, {" ", 4}} {
+		if s, spans := build(try.sep, try.w); ansi.StringWidth(s) <= m.leftWidth() {
+			return s, spans
 		}
 	}
 	return build(" ", 3)
@@ -468,7 +487,7 @@ func (m Model) chatBody(rw, bh int) []string {
 	case m.focus == focusList:
 		out = append(out, " "+sMuted.Render("› press enter to open and write"))
 	default:
-		out = append(out, " "+sMuted.Render("› Message "+firstName(m.chat.Display)))
+		out = append(out, " "+sMuted.Render("› Message "+termSafe(firstName(m.chat.Display))))
 	}
 	return out
 }
@@ -736,19 +755,6 @@ func (m Model) mediaLines(md connector.Media, maxW int) []string {
 			return lines
 		}
 	}
-	// no real photos here: a clean tag (o pops up the real photo); pixel
-	// previews only if asked for with :images blocks
-	if img := m.imgs[md.Ref]; img != nil && m.imagesOn && m.blocks {
-		cols, rows := min(maxW, 44), max(4, min(14, m.chatHeight()/3))
-		key := fmt.Sprintf("%s|%d|%d", md.Ref, cols, rows)
-		if lines, ok := thumbCache[key]; ok {
-			return lines
-		}
-		if lines := renderImage(img, cols, rows); len(lines) > 0 {
-			thumbCache[key] = lines
-			return lines
-		}
-	}
 	switch {
 	case m.failed[md.Ref] != "":
 		return []string{tag + sMuted.Render("  couldn't load, click to retry")}
@@ -771,7 +777,6 @@ func (m Model) imageView() []string {
 	res := ""
 	if idx >= 0 {
 		ref := imgs[idx].Ref
-		key := fmt.Sprintf("%s|%d|%d", ref, m.w-2, areaH)
 		switch img := m.imgs[ref]; {
 		case img != nil && m.kitty != nil:
 			cols, rows := kittyBox(img, m.w-2, areaH)
@@ -780,11 +785,6 @@ func (m Model) imageView() []string {
 			} else {
 				body = []string{sErr.Render("  couldn't show photo: " + err.Error())}
 			}
-		case thumbCache[key] != nil:
-			body = thumbCache[key]
-		case img != nil:
-			body = renderImage(img, m.w-2, areaH)
-			thumbCache[key] = body
 		case m.failed[ref] != "":
 			body = []string{sErr.Render("  couldn't load: " + m.failed[ref])}
 		default:
@@ -793,9 +793,6 @@ func (m Model) imageView() []string {
 		if m.imgs[ref] != nil && m.kitty != nil {
 			b := m.imgs[ref].Bounds()
 			res = fmt.Sprintf("%d×%d original · ", b.Dx(), b.Dy())
-		} else if m.imgs[ref] != nil && len(body) > 0 {
-			// 1x2 square pixels per cell
-			res = fmt.Sprintf("%d×%d px · ", ansi.StringWidth(body[0]), len(body)*2)
 		}
 	}
 	right := sDim.Render(fmt.Sprintf("%s%d / %d ", res, idx+1, len(imgs)))
@@ -817,7 +814,7 @@ func (m Model) imageView() []string {
 		hints += sMuted.Render("     Blocky? This terminal can't show real photos. Run tuon in Ghostty.")
 	}
 	if m.toast != "" {
-		hints = " " + m.toast
+		hints = " " + termSafe(m.toast)
 	}
 	out = append(out, hints)
 	return out

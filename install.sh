@@ -23,7 +23,7 @@ if [ "$(uname)" = "Darwin" ] && [ ! -d /Applications/Ghostty.app ] && [ ! -d "$H
     say "Installing Ghostty (shows real photos)…"
     brew install --cask ghostty
   else
-    say "Skipping Ghostty: Homebrew not found. Photos will use pixel blocks."
+    say "Skipping Ghostty: Homebrew not found. Photos open in your viewer (View photo)."
   fi
 fi
 

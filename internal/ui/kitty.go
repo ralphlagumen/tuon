@@ -17,7 +17,7 @@ import (
 )
 
 // Real photos in terminals that speak the kitty graphics protocol
-// (Ghostty, kitty, WezTerm). Elsewhere Tuon falls back to pixel blocks.
+// (Ghostty, kitty, WezTerm). Elsewhere photos are View photo buttons.
 //
 // How it fits a full-screen TUI: the photo is sent to the terminal once as
 // a PNG file path (tiny message), with a "virtual placement" of N x M cells.
@@ -36,7 +36,7 @@ func detectKitty() bool {
 	switch os.Getenv("TUON_IMAGES") {
 	case "kitty":
 		return true
-	case "blocks":
+	case "off", "blocks": // "blocks" kept for old setups
 		return false
 	}
 	if os.Getenv("KITTY_WINDOW_ID") != "" {

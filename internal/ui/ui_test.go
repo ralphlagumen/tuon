@@ -239,11 +239,9 @@ func TestFlow(t *testing.T) {
 	if s := screen(m); !strings.Contains(s, "▸ View photo") || strings.Contains(s, "▀") {
 		t.Fatalf("photo tag:\n%s", s)
 	}
-	m.blocks = true // :images blocks turns pixel previews on
-	if s := screen(m); !strings.Contains(s, "▀") {
-		t.Fatalf("pixel preview missing with blocks on:\n%s", s)
+	if nm, _ := m.runCommand("images blocks"); !strings.Contains(nm.(Model).toast, "unknown command") {
+		t.Fatalf(":images blocks should be gone, got %q", nm.(Model).toast)
 	}
-	m.blocks = false
 	t.Logf("chat:\n%s", screen(m))
 
 	// React: ↑ from the empty box steps into the messages; pick 😆 (2).
@@ -1179,5 +1177,137 @@ func TestSendErrorWording(t *testing.T) {
 	}
 	if got := sendError(errors.New("big.zip: upload rejected")); got != "big.zip: upload rejected" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestMuteSaysWhichWay(t *testing.T) {
+	m, st, _ := newTestModel(t, 120, 30)
+	_ = st.UpsertChat(connector.Chat{ID: "c1", Name: "Family", LastActivity: time.Now()})
+	m.switchSpace(store.Inbox)
+	next, _ := m.runCommand("mute")
+	if m = next.(Model); !strings.HasPrefix(m.toast, "Muted Family") {
+		t.Fatalf("toast %q", m.toast)
+	}
+	next, _ = m.runCommand("mute")
+	if m = next.(Model); m.toast != "Unmuted Family" {
+		t.Fatalf("toast %q", m.toast)
+	}
+	next, _ = m.runCommand("work")
+	if !strings.Contains(next.(Model).toast, "unknown command") {
+		t.Fatal(":work should be gone")
+	}
+}
+
+func click(m Model, x, y int) Model {
+	next, cmd := m.Update(tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft})
+	return run(next.(Model), cmd)
+}
+
+func TestClickTabsAndPeople(t *testing.T) {
+	m, _, fc := newTestModel(t, 120, 30)
+	fc.directory = []connector.Person{{ID: "900", Name: "Markus Tan"}}
+	m = seed(m)
+	_, spans := m.tabLayout()
+	var inbox tabSpan
+	for _, s := range spans {
+		if s.sp == store.Inbox {
+			inbox = s
+		}
+	}
+	if inbox.to == 0 {
+		t.Fatalf("no inbox tab in %+v", spans)
+	}
+	m = click(m, inbox.from+1, 2)
+	if m.space != store.Inbox {
+		t.Fatalf("clicking Inbox: space = %q", m.space)
+	}
+
+	// a person found by search opens on click
+	m = key(m, "/")
+	var cmd tea.Cmd
+	for _, r := range "markus" {
+		var next tea.Model
+		next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m = next.(Model)
+	}
+	m = run(m, cmd)
+	row := -1
+	for i := 0; i < m.rowCount(); i++ {
+		if p := m.personAt(i); p != nil && p.ID == "900" {
+			row = i
+		}
+	}
+	if row < 0 {
+		t.Fatal("Markus not listed")
+	}
+	m = click(m, 3, 4+1+1+row*rowLines) // header, blank line, search box
+	if m.chat == nil || m.chat.ID != "900" {
+		t.Fatalf("click didn't open Markus (opened %v)", fc.opened)
+	}
+}
+
+func TestDraftsSurviveRestart(t *testing.T) {
+	m, st, _ := newTestModel(t, 120, 30)
+	_ = st.UpsertChat(connector.Chat{ID: "c1", Name: "Raine", LastActivity: time.Now()})
+	m.reloadChats()
+	c, _ := st.Chat("c1")
+	m = run(m, m.openChat(c))
+	m = typeText(m, "half a thought")
+	m.Cleanup() // quitting with text in the box
+	again := New(context.Background(), st, &fakeConn{}, "messenger")
+	if again.drafts["c1"] != "half a thought" {
+		t.Fatalf("draft after restart = %q", again.drafts["c1"])
+	}
+}
+
+func TestSelectedMessageKeys(t *testing.T) {
+	m, st, _ := newTestModel(t, 140, 30)
+	now := time.Now()
+	_ = st.UpsertChat(connector.Chat{ID: "c1", Name: "Raine", LastActivity: now})
+	_, _ = st.AddMessage(connector.Message{ID: "p1", ChatID: "c1", SenderID: "2", Time: now.Add(-time.Hour),
+		Media: []connector.Media{{Kind: connector.Photo, Ref: "img"}}}, false)
+	_, _ = st.AddMessage(connector.Message{ID: "t1", ChatID: "c1", SenderID: "2", Text: "just text", Time: now.Add(-time.Minute)}, false)
+	_, _ = st.AddMessage(connector.Message{ID: "pending:1", ChatID: "c1", SenderID: "1", FromMe: true, Pending: true, Text: "sending", Time: now.Add(-44 * time.Second)}, false)
+	m.reloadChats()
+	c, _ := st.Chat("c1")
+	m = run(m, m.openChat(c))
+	m = key(m, "up") // the pending one
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
+	if m = next.(Model); m.reacting || !strings.Contains(m.toast, "Wait until") {
+		t.Fatalf("react on pending: reacting=%v toast=%q", m.reacting, m.toast)
+	}
+	m = key(m, "up") // "just text"
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+	if m = next.(Model); m.mode == modeImage || !strings.Contains(m.toast, "Nothing to open") {
+		t.Fatalf("o on a text message: mode=%v toast=%q", m.mode, m.toast)
+	}
+	if m.compose.ta.CharLimit < 20000 {
+		t.Fatal("message cap still low")
+	}
+}
+
+// stallConn never answers a send until its context ends.
+type stallConn struct{ fakeConn }
+
+func (s *stallConn) Send(ctx context.Context, _ string, _ string, _ []connector.Mention, _ *connector.ReplyRef) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func TestStalledSendTimesOut(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c := &stallConn{}
+	old := sendTimeout
+	sendTimeout = 200 * time.Millisecond
+	defer func() { sendTimeout = old }()
+	start := time.Now()
+	msg := sendAll(c, ctx, connector.Chat{ID: "c1"}, "hi", nil, nil, nil)()
+	sm := msg.(sentMsg)
+	if sm.err == nil || sm.restore != "hi" || time.Since(start) > sendTimeout+5*time.Second {
+		t.Fatalf("got %+v after %v", sm, time.Since(start))
+	}
+	if !strings.Contains(sendError(sm.err), "offline") {
+		t.Fatalf("wording: %q", sendError(sm.err))
 	}
 }

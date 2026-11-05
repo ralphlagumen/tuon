@@ -104,7 +104,8 @@ func run() error {
 		return err
 	}
 	defer st.Close()
-	_ = st.Prune(1000)
+	_ = st.Prune(ui.KeepMessages)
+	_, _ = st.Compact()
 	trimPhotoCache(filepath.Join(store.Dir(), "cache", "img"))
 
 	// Logs go to a file so they never draw over the UI.

@@ -1214,15 +1214,7 @@ func (c *Conn) FetchMedia(ctx context.Context, m connector.Media) ([]byte, error
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("media: HTTP %d (link may have expired)", resp.StatusCode)
 	}
-	limit := int64(maxDownload(m.Kind))
-	b, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
-	if err != nil {
-		return nil, err
-	}
-	if int64(len(b)) > limit { // refuse, never hand back a cut-off file
-		return nil, fmt.Errorf("it's over tuon's %s limit: open it on your phone", mb(limit))
-	}
-	return b, nil
+	return readCapped(resp.Body, int64(maxDownload(m.Kind)))
 }
 
 // waMedia: the prefix and whatsmeow media type of an encrypted media ref.
@@ -1243,6 +1235,19 @@ func maxDownload(k connector.MediaKind) uint64 {
 		return 100 << 20
 	}
 	return 25 << 20
+}
+
+// readCapped reads all of r, or refuses if it's bigger than limit: never a
+// cut-off file.
+func readCapped(r io.Reader, limit int64) ([]byte, error) {
+	b, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(b)) > limit {
+		return nil, fmt.Errorf("it's over tuon's %s limit: open it on your phone", mb(limit))
+	}
+	return b, nil
 }
 
 func mb(n int64) string { return fmt.Sprintf("%d MB", n>>20) }

@@ -25,6 +25,10 @@ import (
 
 const maxAttach = 25 << 20 // 25 MB, Messenger's limit
 
+// sendTimeout: a send or reaction that hasn't gone through by then fails
+// with a message, instead of hanging on a stalled connection.
+var sendTimeout = 45 * time.Second // tests shorten it
+
 // suggestion is one row in the pop-up above the message box: a person to
 // tag, or a file or folder to attach.
 type suggestion struct {
@@ -233,6 +237,8 @@ func sendAll(conn connector.Connector, ctx context.Context, chat connector.Chat,
 			return sentMsg{}
 		}
 		// a failed send takes its "sending…" copy away, so put the text back
+		ctx, cancel := context.WithTimeout(ctx, sendTimeout)
+		defer cancel()
 		if err := conn.Send(ctx, chatID, text, mentions, reply); err != nil {
 			return sentMsg{err: err, chatID: chatID, restore: text}
 		}

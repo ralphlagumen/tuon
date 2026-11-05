@@ -47,12 +47,11 @@ const (
 )
 
 const (
-	pageSize      = 200 // messages kept on screen per chat
-	thumbMaxCols  = 64  // widest inline photo, in cells (1 cell = 1 px wide)
-	settingImage  = "images"
-	settingBlocks = "blocks"
-	settingSound  = "sound"
-	maxSugg       = 5
+	pageSize     = 200 // messages kept on screen per chat
+	thumbMaxCols = 64  // widest inline photo, in cells (1 cell = 1 px wide)
+	settingImage = "images"
+	settingSound = "sound"
+	maxSugg      = 5
 )
 
 // Quick reactions, same set as Messenger.
@@ -122,14 +121,13 @@ type Model struct {
 
 	// images
 	imagesOn  bool
-	blocks    bool // pixel previews where real photos can't be drawn (off by default)
 	raw       map[string][]byte
 	imgs      map[string]image.Image
 	pending   map[string]bool
 	failed    map[string]string // ref -> error, so we don't retry forever
 	imgIdx    int               // in image view: index into chatImages()
 	recent    []string          // photo refs, oldest first (for letting old ones go)
-	kitty     *kittyImages      // real photos (Ghostty/kitty); nil = pixel blocks
+	kitty     *kittyImages      // real photos (Ghostty/kitty); nil = View photo buttons
 	albumWait []connector.Media // photos to open in the viewer once all have loaded
 	gallery   []connector.Media // photos the full-screen view flips through
 
@@ -172,6 +170,7 @@ type (
 	olderDoneMsg  struct{ err error }
 	newestDoneMsg struct{ err error }
 	pendingCheck  struct{}
+	pruneMsg      struct{}
 	refillMsg     struct {
 		chatID  string
 		attempt int
@@ -198,7 +197,6 @@ func New(ctx context.Context, st *store.Store, conn connector.Connector, platfor
 		platform:  platform,
 		space:     firstFolder(st),
 		imagesOn:  st.Setting(settingImage, "on") == "on",
-		blocks:    st.Setting(settingBlocks, "off") == "on",
 		soundOn:   st.Setting(settingSound, "on") == "on",
 		soundName: st.Setting("sound_name", defaultSound),
 		soundVol:  atoiOr(st.Setting("sound_volume", "100"), 100),
@@ -210,7 +208,7 @@ func New(ctx context.Context, st *store.Store, conn connector.Connector, platfor
 		input:     in,
 		compose:   newBox(),
 		draftAtts: map[string][]pendingFile{},
-		drafts:    map[string]string{},
+		drafts:    st.Drafts(), // text left unsent last time
 		dragFrom:  -1,
 		dragTo:    -1,
 		status:    "connecting…",
@@ -230,10 +228,33 @@ func (m Model) Cleanup() {
 	if m.kitty != nil {
 		m.kitty.clearAll()
 	}
+	// keep unsent text for next time; attached files aren't kept
+	drafts := map[string]string{}
+	for id, v := range m.drafts {
+		drafts[id] = draftText(v)
+	}
+	if m.chat != nil && m.compose.Value() != "" {
+		drafts[m.chat.ID] = draftText(m.compose.Value())
+	}
+	_ = m.st.SaveDrafts(drafts)
 }
 
+// draftText: a draft without its [Image #n] / [File #n] tokens.
+func draftText(v string) string { return strings.TrimSpace(tokenRe.ReplaceAllString(v, "")) }
+
 func (m Model) Init() tea.Cmd {
-	return func() tea.Msg { return startedMsg{m.conn.Start(m.ctx)} }
+	return tea.Batch(func() tea.Msg { return startedMsg{m.conn.Start(m.ctx)} }, pruneLater())
+}
+
+// KeepMessages: the newest messages kept per chat (older ones load again
+// from Messenger when you scroll back).
+const KeepMessages = 1000
+
+// pruneEvery: how often a long session trims back to KeepMessages.
+const pruneEvery = 30 * time.Minute
+
+func pruneLater() tea.Cmd {
+	return tea.Tick(pruneEvery, func(time.Time) tea.Msg { return pruneMsg{} })
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -297,6 +318,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.flash("Not sent: " + sendError(msg.err) + ". Your message is back in the box.")
 		}
 		return m, m.flash("Not sent: " + sendError(msg.err))
+
+	case pruneMsg:
+		_ = m.st.Prune(KeepMessages)
+		return m, tea.Batch(m.reloadMessages(), pruneLater())
 
 	case pendingCheck:
 		m.checkAt = time.Time{}
@@ -600,7 +625,7 @@ func (m *Model) lookupNames() tea.Cmd {
 }
 
 // drawsPhotos: whether this terminal shows photos in the chat at all.
-func (m Model) drawsPhotos() bool { return m.imagesOn && (m.kitty != nil || m.blocks) }
+func (m Model) drawsPhotos() bool { return m.imagesOn && m.kitty != nil }
 
 // fetch loads a photo. Downloaded bytes are kept small (compressed); the
 // decoded picture, which is far bigger, is made only when it will be drawn.
@@ -662,9 +687,6 @@ func (m *Model) remember(ref string) {
 	}
 	if len(m.recent) > keepRaw {
 		m.recent = m.recent[len(m.recent)-keepRaw:]
-	}
-	if len(thumbCache) > 200 {
-		thumbCache = map[string][]string{}
 	}
 }
 
@@ -925,11 +947,15 @@ func (m Model) onComposeKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mentions, m.sugg, m.suggOff, m.atts, m.attSeq = nil, nil, false, nil, 0
 		m.selID, m.scroll = "", 0
 		var reply *connector.ReplyRef
+		replyLost := m.replyTo != nil && val == ""
 		if m.replyTo != nil && val != "" {
 			reply = &connector.ReplyRef{ID: m.replyTo.ID, SenderID: m.replyTo.SenderID}
 		}
 		m.replyTo = nil
 		cmd := sendAll(m.conn, m.ctx, m.chat.Chat, val, mentions, files, reply)
+		if replyLost { // Messenger replies carry text; files alone go as plain messages
+			return m, tea.Batch(cmd, m.flash("Sent without the reply: add some text to reply with files"))
+		}
 		if len(files) > 0 {
 			return m, tea.Batch(cmd, m.flash(fmt.Sprintf("Sending %d file(s)…", len(files))))
 		}
@@ -1077,8 +1103,6 @@ func (m Model) runCommand(cmd string) (tea.Model, tea.Cmd) {
 	switch cmd {
 	case "q", "quit":
 		return m, tea.Quit
-	case "work", "personal", "inbox":
-		m.switchSpace(store.Space(cmd))
 	case "mute":
 		id := m.targetChat()
 		if id == "" {
@@ -1086,17 +1110,20 @@ func (m Model) runCommand(cmd string) (tea.Model, tea.Cmd) {
 		}
 		_ = m.st.ToggleMute(id)
 		m.reloadChats()
-		return m, m.flash("mute toggled")
+		c, err := m.st.Chat(id)
+		if err != nil {
+			return m, nil
+		}
+		if c.Muted {
+			return m, m.flash("Muted " + termSafe(c.Display) + ": no sound, not in Unread")
+		}
+		return m, m.flash("Unmuted " + termSafe(c.Display))
 	case "sound off", "sound on":
 		m.soundOn = cmd == "sound on"
 		_ = m.st.SetSetting(settingSound, strings.TrimPrefix(cmd, "sound "))
 		return m, m.flash("Sound " + strings.TrimPrefix(cmd, "sound "))
 	case "sound", "sounds", "notification", "notifications":
 		m.openSoundPicker()
-	case "images blocks", "images noblocks":
-		m.blocks = cmd == "images blocks"
-		_ = m.st.SetSetting(settingBlocks, map[bool]string{true: "on", false: "off"}[m.blocks])
-		return m, m.flash(map[bool]string{true: "Pixel previews on", false: "Pixel previews off"}[m.blocks])
 	case "images off", "images on", "images", "photos off", "photos on", "photos":
 		switch {
 		case strings.HasSuffix(cmd, " on"):
@@ -1530,6 +1557,9 @@ func (m Model) onSelectKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.selectIndex(0)
 		return m, m.loadOlder()
 	case "r":
+		if sel >= 0 && sel < len(m.msgs) && m.msgs[sel].Pending {
+			return m, m.flash("Wait until it's sent to react")
+		}
 		if sel >= 0 && sel < len(m.msgs) {
 			m.reacting = true
 		}
@@ -1562,6 +1592,7 @@ func (m Model) onSelectKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 					return m, openLink(md.URL)
 				}
 			}
+			return m, m.flash("Nothing to open in this message (ctrl+o opens the newest photo)")
 		}
 		imgs := m.chatImages()
 		if len(imgs) == 0 {
@@ -1651,6 +1682,18 @@ func (m Model) onMouse(e tea.MouseMsg) (tea.Model, tea.Cmd) {
 		m.scroll = max(0, m.scroll-3*d)
 		return m, nil
 	case tea.MouseButtonLeft:
+		if inList && e.Y == 2 { // the folder tabs
+			_, spans := m.tabLayout()
+			for _, s := range spans {
+				if e.X >= s.from && e.X < s.to {
+					m.leaveChat()
+					m.focus = focusList
+					m.switchSpace(s.sp)
+					return m, tea.Batch(tea.ClearScreen, m.preview())
+				}
+			}
+			return m, nil
+		}
 		if inList {
 			top := 4 + 1 // header rows + blank line above the list
 			if m.searching() {
@@ -1665,6 +1708,9 @@ func (m Model) onMouse(e tea.MouseMsg) (tea.Model, tea.Cmd) {
 				off = m.cursor - rows + 1
 			}
 			i := off + (e.Y-top)/rowLines
+			if p := m.personAt(i); p != nil { // someone found by search
+				return m, m.openPerson(*p)
+			}
 			if i >= 0 && i < len(m.chats) {
 				m.leaveChat()
 				m.cursor = i
@@ -1703,8 +1749,10 @@ func (m Model) onReactKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	conn, ctx, chatID, chat := m.conn, m.ctx, m.chat.ID, m.chat.Chat
 	return m, func() tea.Msg {
 		conn.KnowChat(chat)
+		ctx, cancel := context.WithTimeout(ctx, sendTimeout)
+		defer cancel()
 		if err := conn.React(ctx, chatID, msg.ID, msg.SenderID, emoji); err != nil {
-			return toastMsg{"reaction failed: " + err.Error()}
+			return toastMsg{"Reaction not sent: " + sendError(err)}
 		}
 		return nil
 	}

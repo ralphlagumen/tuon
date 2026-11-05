@@ -23,7 +23,7 @@ func newBox() box {
 	ta := textarea.New()
 	ta.Prompt = ""
 	ta.ShowLineNumbers = false
-	ta.CharLimit = 4000
+	ta.CharLimit = 20000 // Messenger's own limit is around 20,000
 	ta.MaxHeight = 0
 	ta.SetHeight(1)
 	ta.EndOfBufferCharacter = ' '

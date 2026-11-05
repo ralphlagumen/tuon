@@ -1,6 +1,7 @@
 package store
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -245,5 +246,84 @@ func TestMissingPlaceholder(t *testing.T) {
 		if m.ID == "m1" && m.Text != "okiee" {
 			t.Fatalf("real message overwritten: %+v", m)
 		}
+	}
+}
+
+func TestSearchIsLiteral(t *testing.T) {
+	s, err := OpenPath(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	now := time.Now()
+	for id, name := range map[string]string{"1": "a_b team", "2": "axb team", "3": "50% off"} {
+		_ = s.UpsertChat(connector.Chat{ID: id, Name: name, LastActivity: now})
+	}
+	got := func(q string) int { rows, _ := s.Chats(Inbox, q); return len(rows) }
+	if n := got("a_b"); n != 1 {
+		t.Fatalf(`"a_b" matched %d chats, want 1`, n)
+	}
+	if n := got("50%"); n != 1 {
+		t.Fatalf(`"50%%" matched %d chats, want 1`, n)
+	}
+	if n := got("team"); n != 2 {
+		t.Fatalf(`"team" matched %d, want 2`, n)
+	}
+}
+
+func TestRenameFolderMovesChats(t *testing.T) {
+	s, err := OpenPath(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	work, err := s.AddSpace("Clients")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RenameSpace("Nope", "X"); err == nil {
+		t.Fatal("renaming a folder that doesn't exist should fail")
+	}
+	_, _ = s.AddSpace("Fam")
+	_ = s.UpsertChat(connector.Chat{ID: "1", Name: "Dev", LastActivity: time.Now()})
+	_ = s.SetSpace("1", work)
+	if _, err := s.RenameSpace(work, "Fam"); err == nil {
+		t.Fatal("renaming onto an existing folder should fail")
+	}
+	if rows, _ := s.Chats(work, ""); len(rows) != 1 {
+		t.Fatal("a failed rename moved the chats anyway")
+	}
+	jobs, err := s.RenameSpace(work, "Jobs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rows, _ := s.Chats(jobs, ""); len(rows) != 1 {
+		t.Fatal("chats didn't follow the rename")
+	}
+}
+
+func TestCompactGivesSpaceBack(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "t.db")
+	s, err := OpenPath(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	now := time.Now()
+	for i := 0; i < 3000; i++ {
+		_, _ = s.AddMessage(connector.Message{ID: fmt.Sprint(i), ChatID: "c", SenderID: "2", Text: strings.Repeat("x", 400), Time: now.Add(time.Duration(i) * time.Second)}, false)
+	}
+	_ = s.Prune(100)
+	var before, after int64
+	_ = s.DB.QueryRow(`PRAGMA page_count`).Scan(&before)
+	if did, err := s.Compact(); !did || err != nil {
+		t.Fatalf("compact: did=%v err=%v", did, err)
+	}
+	_ = s.DB.QueryRow(`PRAGMA page_count`).Scan(&after)
+	if after*2 > before {
+		t.Fatalf("pages %d -> %d: not much smaller", before, after)
+	}
+	if did, _ := s.Compact(); did {
+		t.Fatal("nothing to give back the second time")
 	}
 }
