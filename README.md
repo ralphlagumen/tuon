@@ -6,7 +6,7 @@
 
 <p align="center">
   A lightweight terminal client for Facebook Messenger: your chats, sorted into folders, and nothing else.<br>
-  <em>Tuon</em> is Tagalog for "focus".
+  <em>Tuon</em> (said <em>too-OHN</em>) is Tagalog for "focus".
 </p>
 
 <p align="center">
