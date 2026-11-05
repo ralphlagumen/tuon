@@ -12,6 +12,7 @@ import (
 	"go.mau.fi/mautrix-meta/pkg/messagix/securehistory"
 	"go.mau.fi/mautrix-meta/pkg/messagix/table"
 	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/proto/waArmadilloApplication"
 	"go.mau.fi/whatsmeow/proto/waArmadilloBackupMessage"
 	"go.mau.fi/whatsmeow/proto/waConsumerApplication"
 	"go.mau.fi/whatsmeow/proto/waMsgApplication"
@@ -289,15 +290,23 @@ func (c *Conn) archiveMessage(chatID string, p *securehistory.DecryptedProtobuf)
 	if err != nil {
 		return connector.Message{}, false
 	}
-	ca, ok := dec.Message.(*waConsumerApplication.ConsumerApplication)
-	if !ok {
+	var text string
+	var media []connector.Media
+	switch ca := dec.Message.(type) {
+	case *waConsumerApplication.ConsumerApplication:
+		content := ca.GetPayload().GetContent()
+		if content == nil || content.GetReactionMessage() != nil || content.GetEditMessage() != nil {
+			return connector.Message{}, false
+		}
+		text, media = waContent(content)
+	case *waArmadilloApplication.Armadillo: // shared links, posts, videos
+		var ok bool
+		if text, media, ok = armadilloContent(ca); !ok {
+			return connector.Message{}, false
+		}
+	default:
 		return connector.Message{}, false
 	}
-	content := ca.GetPayload().GetContent()
-	if content == nil || content.GetReactionMessage() != nil || content.GetEditMessage() != nil {
-		return connector.Message{}, false
-	}
-	text, media := waContent(content)
 	text = connector.SafeText(text, true)
 	if text == "" && len(media) == 0 {
 		return connector.Message{}, false

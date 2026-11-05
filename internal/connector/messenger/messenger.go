@@ -37,6 +37,7 @@ import (
 	"go.mau.fi/mautrix-meta/pkg/messagix/table"
 	"go.mau.fi/mautrix-meta/pkg/messagix/types"
 	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/proto/waArmadilloApplication"
 	"go.mau.fi/whatsmeow/proto/waCommon"
 	"go.mau.fi/whatsmeow/proto/waConsumerApplication"
 	"go.mau.fi/whatsmeow/proto/waMediaTransport"
@@ -610,15 +611,24 @@ func (c *Conn) onWA(raw any) {
 	if !ok {
 		return
 	}
-	app, ok := evt.Message.(*waConsumerApplication.ConsumerApplication)
-	if !ok {
-		return // reactions, edits, receipts etc. — not shown
-	}
-	content := app.GetPayload().GetContent()
-	if content == nil {
-		return
-	}
 	chat := evt.Info.Chat
+	var content *waConsumerApplication.ConsumerApplication_Content
+	var text string
+	var media []connector.Media
+	switch app := evt.Message.(type) {
+	case *waConsumerApplication.ConsumerApplication:
+		content = app.GetPayload().GetContent()
+		if content == nil {
+			return
+		}
+	case *waArmadilloApplication.Armadillo: // shared links, posts, videos
+		var ok bool
+		if text, media, ok = armadilloContent(app); !ok {
+			return
+		}
+	default:
+		return // receipts, edits, etc. — not shown
+	}
 	if r := content.GetReactionMessage(); r != nil {
 		c.emit(connector.ReactionEvent{
 			ChatID: chat.User, MessageID: r.GetKey().GetID(),
@@ -626,7 +636,9 @@ func (c *Conn) onWA(raw any) {
 		})
 		return
 	}
-	text, media := waContent(content)
+	if content != nil {
+		text, media = waContent(content)
+	}
 	text = connector.SafeText(text, true)
 	if text == "" && len(media) == 0 {
 		return
@@ -790,6 +802,47 @@ func (c *Conn) resetSession(sender waTypes.JID) {
 		return
 	}
 	c.log.Warn().Str("device", addr).Msg("reset encrypted session after a failed message")
+}
+
+// armadilloContent reads Messenger's "Armadillo" messages: shared links,
+// Facebook posts and videos (an extended content card), as text plus a
+// link card. Kinds tuon can't read become a short note, never nothing.
+func armadilloContent(a *waArmadilloApplication.Armadillo) (string, []connector.Media, bool) {
+	content := a.GetPayload().GetContent()
+	if content == nil {
+		return "", nil, false // signals, application data: not a message
+	}
+	x := content.GetExtendedContentMessage()
+	if x == nil {
+		return "Shared something tuon can't show yet. Open it on your phone.", nil, true
+	}
+	link := ""
+	for _, cta := range x.GetCtas() {
+		for _, u := range []string{cta.GetNativeURL(), cta.GetActionURL()} {
+			if p, err := url.Parse(u); err == nil && (p.Scheme == "https" || p.Scheme == "http") && p.Host != "" {
+				link = u
+				break
+			}
+		}
+		if link != "" {
+			break
+		}
+	}
+	text := x.GetMessageText()
+	if link == "" {
+		if text == "" {
+			text = "Shared something tuon can't show yet. Open it on your phone."
+		}
+		return text, nil, true
+	}
+	title := connector.SafeText(x.GetTitleText(), false)
+	if title == "" {
+		title = connector.SafeText(x.GetHeaderTitle(), false)
+	}
+	return text, []connector.Media{{
+		Kind: connector.Link, URL: cleanURL(link),
+		Title: title, Source: connector.SafeText(x.GetSubtitleText(), false),
+	}}, true
 }
 
 func waContent(c *waConsumerApplication.ConsumerApplication_Content) (string, []connector.Media) {
