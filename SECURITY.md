@@ -15,8 +15,19 @@ Tuon logs in to Messenger as you, keeps your encryption keys, and shows text and
 ## The lock and tuon's key
 
 - **Tuon has its own key, and opening tuon asks for Touch ID or your Mac password.** The key is wrapped by a key inside your Mac's Secure Enclave, which never leaves the chip; only a small helper (`tuon-keyhelper`, built from source by `install.sh`) asks the chip to use it. On Linux and Windows, or a Mac without a Secure Enclave, a passphrase (stretched with Argon2id) protects the key instead, with longer waits after wrong tries.
+- **You unlock once per start.** A small launcher asks for Touch ID and hands the key to the chat app over a private pipe, never through a file or an environment variable.
 - **Tuon locks itself after 10 minutes without input**, or when you type `:lock`. The screen is cleared until you unlock.
+- **`:previews off`** hides message text in the chat list and while browsing, for when someone can see your screen.
 - **If you lose the passphrase** (or the Mac's Secure Enclave key, e.g. after resetting the Mac), the data can't be opened: log in again and restore older chats with your Messenger PIN.
+
+## The sandbox (macOS)
+
+The chat app runs inside a macOS sandbox, so even a bug or a bad dependency inside tuon is fenced in:
+
+- **It can't read your other secrets:** SSH and cloud keys (`~/.ssh`, `~/.aws`, …), keychains, browser profiles and cookies, password managers, shell history, Mail and Messages.
+- **It can only write** to its own folder, Downloads (files you save) and the temp folder. It can't change your shell's startup files or replace the tuon program.
+- Logging in and updating run outside it, in the launcher, because they open a browser or rebuild tuon.
+- `tuon sandbox-test` shows the checks passing. `TUON_NO_SANDBOX=1 tuon` turns it off for troubleshooting. Linux and Windows don't have it yet.
 
 ## Data on your computer
 
@@ -42,22 +53,28 @@ Everything shown in Tuon (names, messages, link titles, reactions, even error te
 Tuon builds on code from other people (mautrix-meta, whatsmeow and about 140 other modules). That code runs with your rights, so:
 
 - **Every dependency is pinned by checksum** (`go.sum`, checked against Go's public checksum database). A published version can't be swapped silently.
-- **`tuon update` shows what changed before building.** If an update changes dependencies, it lists them and needs you to type `yes`. A checksum change without a matching dependency change is refused. Modules are re-verified (`go mod verify`) before the build.
+- **`tuon update` installs only signed releases.** It takes the newest version tag signed with the maintainer's key (built into tuon) and skips, by name, any tag that isn't. Someone who takes over the GitHub repo or account can push code, but can't sign it.
+- **It shows what changed before building.** If an update changes dependencies, it lists them and needs you to type `yes`. A checksum change without a matching dependency change is refused. Modules are re-verified (`go mod verify`) before the build.
+- **Dependency updates are reviewed by hand.** [DEPENDENCIES.md](DEPENDENCIES.md) lists the modules that touch the network, your session or encryption, with the version last reviewed, and `./scripts/deps-review.sh` flags changes to them.
+- **Builds are reproducible.** The same tag built with the same Go version gives the same file, so anyone can compare against the published `SHA256SUMS`.
 - **Checks before every release:** `./scripts/check.sh` verifies checksums, builds, tests and scans for known vulnerabilities (govulncheck). Tuon requires Go 1.27.3, which fixes a certificate-checking flaw in 1.27.2.
+- **The repository** requires signed commits and pull requests on `master`, with no bypass.
 
 ## If your laptop is stolen, or you think your session leaked
 
-1. **On your phone, log tuon out:** Messenger, Settings, Accounts Centre, Password and security, Where you're logged in: remove the tuon / browser session.
-2. **Remove tuon's linked device:** Messenger, Settings, Privacy & safety, End-to-end encrypted chats, Logins / devices: remove "tuon".
+1. **On your phone, log tuon out:** in Messenger's Accounts Centre (Password and security, Where you're logged in), remove the session tuon used. It may show as a browser, "Chrome" or a Mac.
+2. **Remove tuon's linked device** for encrypted chats in Messenger's security settings (End-to-end encrypted chats; the menu names change between app versions).
 3. **Change your Facebook password** and turn on two-factor authentication if it isn't on.
 4. **If you still have the computer,** run `tuon logout --wipe`.
+
+Without your Touch ID or passphrase, whoever has the laptop can't open tuon's session, messages or keys: they're encrypted.
 
 Keep FileVault (macOS) or BitLocker (Windows) on: it's what protects tuon's data when the laptop is off or locked. Tuon warns at the top of the screen if FileVault is off.
 
 ## Limits you should know
 
 - **Meta's terms.** Tuon uses Messenger the way Beeper does, through an unofficial route (mautrix-meta). Meta could ask you to verify your account or lock it.
-- **Linked device.** For encrypted chats, Tuon registers as one of your devices. You can see and remove it in Messenger's security settings.
+- **Linked device.** For encrypted chats, tuon registers as one of your devices. You can see and remove it in Messenger's security settings. If one contact's messages keep failing to decrypt (their phone kept outdated keys for tuon), `tuon relink` registers a fresh device; those messages still arrive meanwhile through your backup.
 - **Your computer.** The lock and encryption stop other apps and anyone holding a copy of your files from reading tuon's data. They can't stop malware already running as you while tuon is unlocked: it could, given time, watch your screen and keyboard. Keep your computer clean and up to date.
 
 ## Use at your own risk

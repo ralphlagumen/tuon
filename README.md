@@ -5,7 +5,7 @@
 <h1 align="center">tuon</h1>
 
 <p align="center">
-  Messenger in your terminal: your chats, sorted into folders, and nothing else.<br>
+  A lightweight terminal client for Facebook Messenger: your chats, sorted into folders, and nothing else.<br>
   <em>Tuon</em> is Tagalog for "focus".
 </p>
 
@@ -31,6 +31,7 @@ It's a personal tool that talks to Messenger the unofficial way. Read [Before yo
 - **Files** people send you save to your Downloads folder with one key. Tuon never opens or runs them.
 - **Keyboard first**, with the mouse working too: click a chat to open it, click a photo to view it, drag over messages to copy them.
 - **Quiet by default.** One soft sound for new messages, which you can change or turn off, and no "seen" receipts sent back.
+- **Locked and encrypted.** Opening tuon asks for Touch ID (or a passphrase off macOS), it locks itself when idle, and your session, messages and keys are encrypted on disk. The chat app runs in a sandbox that can't read your other secrets. See [SECURITY.md](SECURITY.md).
 
 <p align="center">
   <img src="docs/img/screen-unread.svg" alt="The Unread tab showing one unread chat across folders">
@@ -46,9 +47,9 @@ cd tuon
 ./install.sh
 ```
 
-This builds `tuon` into `~/.local/bin`, installs [Ghostty](https://ghostty.org) (the terminal that shows real photos) if you don't have it, then runs `tuon setup`: you log in, and can enter your Messenger PIN to bring back older encrypted chats.
+This builds `tuon` and its small Touch ID helper (`tuon-keyhelper`, which needs Apple's command line tools: `xcode-select --install`) into `~/.local/bin`, installs [Ghostty](https://ghostty.org) (the terminal that shows real photos) if you don't have it, then runs `tuon setup`.
 
-**Updating:** run `tuon update`. It pulls the latest changes into the folder you installed from and rebuilds `tuon` in place. Restart tuon afterwards if it was open.
+**Updating:** run `tuon update`. It installs the newest release tag signed by tuon's maintainer and skips anything unsigned, shows what changed, and asks before building if the update changes tuon's dependencies. Restart tuon afterwards if it was open.
 
 **Linux:** `./install.sh` works the same, minus Ghostty. For photos, use kitty, Ghostty or WezTerm. For copy and paste, install `wl-clipboard` (Wayland) or `xclip` (X11).
 
@@ -61,7 +62,7 @@ go build -o tuon.exe ./cmd/tuon
 
 ## Log in
 
-`./install.sh` runs `tuon setup` for you (or run `tuon` the first time). It asks how you want to log in:
+`./install.sh` runs `tuon setup` for you (or run `tuon` the first time). Setup turns on the lock (Touch ID on a Mac, a passphrase elsewhere), then asks how you want to log in:
 
 | Option | What happens |
 |---|---|
@@ -69,11 +70,11 @@ go build -o tuon.exe ./cmd/tuon
 | 2. Email and password | Typed into Tuon. This is the Messenger app's own login, and it asks for a 2-factor code if your account needs one. |
 | 3. Paste cookies | For when the other two don't work. |
 
-The browser window uses a separate, temporary profile, so your usual browser and its logins aren't touched. Tuon never stores your password, only the session Meta gives back, and keeps it in your system keychain.
+The browser window uses a separate, temporary profile, so your usual browser and its logins aren't touched. Tuon never stores your password, only the session Meta gives back, encrypted with tuon's own key.
 
-Encrypted chats start empty on a new device. Setup asks for your 6-digit Messenger PIN to load their older messages; you can skip it and run `tuon history` later, with Tuon closed.
+Encrypted chats start empty on a new device, so right after you log in, setup asks for your 6-digit Messenger PIN to load their older messages (typed or pasted). You can skip it and run `tuon history` later, with tuon closed.
 
-When Messenger logs you out, Tuon asks you to log in again right away. `tuon logout` forgets your session on this computer, and `tuon logout --wipe` also deletes your chats, folders and encryption keys.
+When Messenger logs you out, tuon asks you to log in again right away. `tuon logout` forgets your session on this computer, and `tuon logout --wipe` also deletes your chats, folders and encryption keys.
 
 ## Use it
 
@@ -123,7 +124,18 @@ With a message selected:
 
 Attached files appear in your text as `[Image #1]` or `[File #2]`. Delete the token to drop the file. Your message shows right away as "sending…", and as "not sent" if Messenger hasn't confirmed it after 45 seconds. If sending fails, your text (and any files not sent) go back in the box.
 
-Type `:` in the chat list for commands: `:mute`, `:sound` (pick the new-message sound and volume), `:images off`, `:previews off` (no message text in the chat list, for when someone can see your screen), `:lock`, `:quit`.
+Type `:` in the chat list for commands: `:mute`, `:sound` (pick the new-message sound and volume), `:images off`, `:previews off` (no message text in the chat list, for when someone can see your screen), `:lock` (tuon also locks after 10 minutes idle), `:quit`.
+
+From your shell:
+
+| Command | Does |
+|---|---|
+| `tuon` | Open tuon |
+| `tuon setup` / `tuon login` | Log in (and restore older encrypted chats with your PIN) |
+| `tuon history` | Restore older encrypted chats with your PIN |
+| `tuon update` | Install the newest signed release |
+| `tuon relink` | Register tuon again as a new linked device, if one contact's messages keep failing to decrypt |
+| `tuon logout [--wipe]` | Forget your session (`--wipe`: and all local data) |
 
 ## Performance
 
@@ -135,9 +147,9 @@ Type `:` in the chat list for commands: `:mute`, `:sound` (pick the new-message 
 | CPU, idle | under 1% |
 | Redraws while idle | none, apart from a backup check every few minutes while an encrypted message is still loading |
 | Photos downloaded when opening a chat in Terminal.app | 0 (on click) |
-| Program size | 29 MB, one file |
+| Program size | 34 MB, plus a 63 KB Touch ID helper |
 
-Measured on an M-series Mac on 2026-11-05, with the same account, after the first sync (memory with macOS `footprint`, CPU with `top`). The Chrome figure adds up every Chrome process for one messenger.com tab, left idle for 30 seconds.
+Memory and CPU measured on an M-series Mac on 2026-11-05, with the same account, after the first sync (memory with macOS `footprint`, CPU with `top`), before the encryption and sandbox work; size measured after it. The Chrome figure adds up every Chrome process for one messenger.com tab, left idle for 30 seconds.
 
 ## How it works
 
@@ -154,40 +166,49 @@ The **connector** speaks Messenger's protocol through [mautrix-meta](https://git
 ## Before you use it
 
 - **Meta's terms.** Messenger has no official API for personal accounts, so Tuon uses the same unofficial route as Beeper. That breaks Meta's terms, and Meta could ask you to verify your account or lock it. Use it on your own account, at your own risk.
-- **Linked device.** For encrypted chats, Tuon registers as one of your devices, so you may get a "new login" notice. You can remove it in Messenger's security settings.
+- **Linked device.** For encrypted chats, tuon registers as one of your devices, so you may get a "new login" notice. You can remove it in Messenger's security settings. Careful: removing tuon's *login* there also logs tuon out.
 - **Security.** [SECURITY.md](SECURITY.md) covers how Tuon protects your login and data, and what it can't protect.
 
 ## Known gaps
 
-- Older encrypted messages need your Messenger PIN: run `tuon history` once (with Tuon closed). Tuon uses the PIN to join Messenger's encrypted backup and doesn't keep it. Messenger allows only a few wrong tries.
+- Older encrypted messages need your Messenger PIN (setup asks; or `tuon history` later). Tuon uses the PIN to join Messenger's encrypted backup and doesn't keep it. Messenger allows only a few wrong tries.
 - Read state isn't sent back to Messenger, so your phone still shows chats you read in Tuon as unread.
 - Videos and voice messages show as tags. Open them on your phone.
-- Encrypted messages that fail to decrypt show as "loading from your backup" until your phone backs them up, usually within minutes.
+- Encrypted messages that fail to decrypt show as "loading from your backup" until your phone backs them up, usually within seconds to minutes. If one person's messages keep failing, tuon says so and suggests `tuon relink`.
+- The sandbox is macOS only for now.
 
 ## Files
 
 | Where | What |
 |---|---|
-| System keychain, item "tuon" | Your session (or `~/.config/tuon/login.json`, owner-only, if there's no keychain) |
-| `~/.config/tuon/tuon.db` | Chats, folders, drafts, the newest 1,000 messages per chat, encryption keys |
+| `~/.config/tuon/vault.json` | tuon's key, wrapped by your Mac's Secure Enclave (or your passphrase): useless on its own |
+| `~/.config/tuon/login.enc` | Your session, encrypted |
+| `~/.config/tuon/tuon.db` | Chats, folders, the newest 1,000 messages per chat; message text, previews, drafts and backup keys encrypted |
+| `~/.config/tuon/keys.db` | Keys for encrypted chats, encrypted page by page |
 | `~/.config/tuon/tuon.log` | Warnings and errors; starts over past 5 MB |
 | `~/.config/tuon/cache/img/` | Photo cache for Ghostty, kitty and WezTerm; photos unused for 2 weeks are removed, capped at 100 MB |
+| `~/.config/tuon/source` | Where your tuon clone is, for `tuon update` |
 
 Everything in `~/.config/tuon` is readable only by you.
 
 ## Development
 
 ```sh
-go build -o bin/tuon ./cmd/tuon      # build
-go test ./...                        # tests, no network
+go build -trimpath -ldflags "-s -w -buildid=" -o bin/tuon ./cmd/tuon   # build (same flags as releases)
+./scripts/check.sh            # checksums, build, vet, tests, known vulnerabilities: run before every push
+./scripts/deps-review.sh      # after changing a dependency (see DEPENDENCIES.md)
+./scripts/release.sh v1.2.3   # build a signed tag for every platform, with SHA256SUMS
 
-TUON_LIVE=1 go test ./internal/ui -run TestLive -v               # read-only check on your account
-TUON_DOCS=docs/img go test ./internal/ui -run TestDocsScreenshots # redraw the README screenshots
+TUON_DOCS=docs/img go test ./internal/ui -run TestDocsScreenshots   # redraw the README screenshots
 ```
 
 ```
-cmd/tuon/                       entry: login, logout, startup
-internal/auth/                  saved login: keychain, browser login
+cmd/tuon/                       entry: launcher, login, setup, update, relink
+cmd/tuon-keyhelper/             Swift helper for the Secure Enclave / Touch ID
+internal/vault/                 tuon's key: Touch ID or passphrase, encryption
+internal/keystore/              encrypted keys.db for encrypted-chat keys
+internal/sandbox/               macOS sandbox for the chat app
+internal/auth/                  the saved session, browser login
 internal/connector/             what a chat platform must provide
 internal/connector/messenger/   Messenger through mautrix-meta and whatsmeow
 internal/store/                 SQLite: chats, folders, messages, reactions
