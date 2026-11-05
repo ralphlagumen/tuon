@@ -13,7 +13,7 @@ Tags: `✔` read in code this pass · `⚠` lead, still to confirm (usually need
 |---|---|---|
 | 01 | [Getting in](01-getting-in.md): install, setup, login ×3, session storage, expiry, logout, `tuon history` | open, audited 2026-11-05 |
 | 02 | [Chat list & folders](02-chat-list.md): folders, Unread, `/` search + message a person, `t` move, `f` manage | open, audited 2026-11-05 |
-| 03 | Inside a chat: send, newline, `@` mentions, `@~/` attach, `ctrl+v`, reply, react, `o`, `y`, sending…/not sent | not audited |
+| 03 | [Inside a chat](03-inside-chat.md): send, newline, `@` mentions, `@~/` attach, `ctrl+v`, reply, react, `o`, `y`, sending…/not sent | open, audited 2026-11-05 |
 | 04 | Media & photos: kitty placeholders, `View photo`, gallery, cache trim, viewer temp folder | not audited |
 | 05 | Quiet & commands: chime + `:sound`, `:mute`, `:images off`, no read receipts, `?` help | not audited |
 | 06 | [Sync & data](06-sync-data.md): E2EE 1:1 merge, history fill, 1,000-message prune, dedupe, older-page loading | open: early P0 logged, rest not audited |
