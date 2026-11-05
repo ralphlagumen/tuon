@@ -16,6 +16,7 @@ import (
 
 	"github.com/ralph/tuon/internal/auth"
 	"github.com/ralph/tuon/internal/connector/messenger"
+	"github.com/ralph/tuon/internal/sandbox"
 	"github.com/ralph/tuon/internal/store"
 	"github.com/ralph/tuon/internal/ui"
 	"github.com/ralph/tuon/internal/vault"
@@ -25,8 +26,12 @@ func main() {
 	// stay lean: collect garbage sooner, and aim to stay under 96 MB
 	debug.SetGCPercent(50)
 	debug.SetMemoryLimit(96 << 20)
-	privateFiles() // everything tuon writes is readable only by you
 	args := os.Args[1:]
+	// the chat app itself runs sandboxed (login, update etc. need more)
+	if len(args) == 0 || args[0] == "--here" || args[0] == "-here" || args[0] == "sandbox-test" {
+		sandboxNote = sandbox.Enter() // only returns if it couldn't
+	}
+	privateFiles() // everything tuon writes is readable only by you
 	if len(args) > 0 {
 		switch args[0] {
 		case "--here", "-here": // tuon always runs in place now; kept for old habits
@@ -53,6 +58,8 @@ func main() {
 				fail(err)
 			}
 			return
+		case "sandbox-test":
+			os.Exit(sandboxTest())
 		case "logout":
 			if err := logout(len(args) > 1 && args[1] == "--wipe"); err != nil {
 				fail(err)
@@ -147,6 +154,9 @@ func run() error {
 
 	model := ui.New(ctx, st, conn, "messenger")
 	model.Warn(diskWarning())
+	if sandboxNote != "" {
+		model.Warn(sandboxNote)
+	}
 	if vlt != nil { // lock the screen after 10 idle minutes, or on :lock
 		var touch func() error
 		if h := vault.FindHelper(); vlt.Kind() == vault.KindEnclave && h != nil {

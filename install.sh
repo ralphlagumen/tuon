@@ -15,8 +15,11 @@ command -v go >/dev/null 2>&1 || { say "Go is needed to build tuon: brew install
 
 say "Building tuon…"
 mkdir -p bin
-# sourceDir lets `tuon update` find this clone later
-go build -trimpath -ldflags "-s -w -X main.sourceDir=$(pwd)" -o bin/tuon ./cmd/tuon
+# the same flags for everyone, so a release builds to the same checksum
+go build -trimpath -ldflags "-s -w -buildid=" -o bin/tuon ./cmd/tuon
+# `tuon update` finds this clone through this file
+mkdir -p "$HOME/.config/tuon" && chmod 700 "$HOME/.config/tuon"
+printf '%s\n' "$(pwd)" > "$HOME/.config/tuon/source" && chmod 600 "$HOME/.config/tuon/source"
 
 if [ "$(uname)" = "Darwin" ] && [ ! -d /Applications/Ghostty.app ] && [ ! -d "$HOME/Applications/Ghostty.app" ]; then
   if command -v brew >/dev/null 2>&1; then

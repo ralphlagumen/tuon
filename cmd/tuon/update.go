@@ -1,6 +1,7 @@
 package main
 
 import (
+	_ "embed"
 	"errors"
 	"fmt"
 	"os"
@@ -12,20 +13,32 @@ import (
 	"github.com/ralph/tuon/internal/store"
 )
 
-// sourceDir is the git clone tuon was built from. install.sh sets it with
-// -ldflags "-X main.sourceDir=…", so `tuon update` knows where to pull.
+// sourceDir is the git clone tuon was built from. Older builds had it set
+// with -ldflags; now install.sh writes it to ~/.config/tuon/source, so the
+// binary itself is the same for everyone (reproducible builds).
 var sourceDir string
+
+func sourcePath() string {
+	if sourceDir != "" {
+		return sourceDir
+	}
+	b, err := os.ReadFile(filepath.Join(store.Dir(), "source"))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}
 
 // update pulls the latest tuon into its clone and rebuilds this binary.
 func update() error {
-	src := sourceDir
+	src := sourcePath()
 	if src == "" {
 		if wd, err := os.Getwd(); err == nil && isClone(wd) {
 			src = wd // a plain `go build` run from inside the clone
 		}
 	}
 	if src == "" || !isClone(src) {
-		return errors.New("this tuon wasn't built by install.sh, so it doesn't know where its source is.\n" +
+		return errors.New("tuon doesn't know where its source folder is.\n" +
 			"  Run ./install.sh once from your tuon folder; after that `tuon update` works")
 	}
 	if _, err := exec.LookPath("go"); err != nil {
@@ -49,17 +62,27 @@ func update() error {
 		return err
 	}
 	fmt.Printf("\n  Fetching the latest tuon into %s…\n", src)
-	if out, err := git(src, "fetch", "--quiet"); err != nil {
+	if out, err := git(src, "fetch", "--quiet", "--tags"); err != nil {
 		return fmt.Errorf("git fetch failed:\n%s", indent(out))
 	}
-	after, err := git(src, "rev-parse", "@{u}")
+	// only a release tag signed by tuon's maintainer is installed: a hacked
+	// repo or account can push code, but can't sign it with that key
+	tag, after, err := latestSignedRelease(src)
 	if err != nil {
-		return fmt.Errorf("this clone's branch doesn't track a remote: %w", err)
+		return err
 	}
 	if before == after {
-		fmt.Println("  Already up to date.")
+		fmt.Printf("  Already up to date (%s).\n", tag)
 		return nil
 	}
+	if _, err := git(src, "merge-base", "--is-ancestor", before, after); err != nil {
+		if _, ahead := git(src, "merge-base", "--is-ancestor", after, before); ahead == nil {
+			fmt.Printf("  This copy is newer than the latest release (%s); nothing to do.\n", tag)
+			return nil
+		}
+		return fmt.Errorf("release %s doesn't follow from this copy's history; refusing to switch", tag)
+	}
+	fmt.Printf("  Release %s, signed by the maintainer.\n", tag)
 	if log, err := git(src, "log", "--oneline", "--no-decorate", before+".."+after); err == nil && log != "" {
 		fmt.Println("  New:")
 		fmt.Println(indent(log))
@@ -89,8 +112,7 @@ func update() error {
 
 	fmt.Println("  Building…")
 	tmp := exe + ".new"
-	build := exec.Command("go", "build", "-trimpath",
-		"-ldflags", "-s -w -X main.sourceDir="+src, "-o", tmp, "./cmd/tuon")
+	build := exec.Command("go", "build", "-trimpath", "-ldflags", releaseLDFlags, "-o", tmp, "./cmd/tuon")
 	build.Dir = src
 	if out, err := build.CombinedOutput(); err != nil {
 		_ = os.Remove(tmp)
@@ -126,6 +148,43 @@ func update() error {
 		fmt.Println("  tuon is open in another window: quit it and start it again to use the update.")
 	}
 	return nil
+}
+
+// releaseLDFlags: the same flags as install.sh and scripts/release.sh, so
+// every build of a release has the same checksum.
+const releaseLDFlags = "-s -w -buildid="
+
+//go:embed release_signers
+var releaseSigners string
+
+// trustedSigners: the public keys allowed to sign releases (tests swap it).
+var trustedSigners = releaseSigners
+
+// latestSignedRelease finds the newest v* tag with a valid signature from a
+// trusted key. Newer tags that aren't signed that way are skipped, loudly.
+func latestSignedRelease(src string) (tag, commit string, err error) {
+	list, err := git(src, "tag", "--list", "v*", "--sort=-v:refname")
+	if err != nil {
+		return "", "", err
+	}
+	f, err := os.CreateTemp("", "tuon-signers-")
+	if err != nil {
+		return "", "", err
+	}
+	defer os.Remove(f.Name())
+	if _, err := f.WriteString(trustedSigners); err != nil {
+		return "", "", err
+	}
+	f.Close()
+	for _, t := range strings.Fields(list) {
+		if _, err := git(src, "-c", "gpg.ssh.allowedSignersFile="+f.Name(), "verify-tag", t); err != nil {
+			fmt.Printf("  Skipping %s: not signed by tuon's maintainer.\n", t)
+			continue
+		}
+		c, err := git(src, "rev-parse", t+"^{commit}")
+		return t, c, err
+	}
+	return "", "", errors.New("no signed release found yet, so nothing was installed")
 }
 
 // changedRequires keeps the added/removed module lines of a go.mod diff.
