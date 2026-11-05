@@ -30,7 +30,7 @@ func history() error {
 		return err
 	}
 	defer release()
-	st, err := store.Open()
+	st, err := openStore()
 	if err != nil {
 		return err
 	}

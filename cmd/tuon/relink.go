@@ -52,7 +52,7 @@ func forgetDevice() error {
 	if strings.TrimSpace(readLine()) != "relink" {
 		return errors.New("cancelled")
 	}
-	st, err := store.Open()
+	st, err := openStore()
 	if err != nil {
 		return err
 	}

@@ -9,13 +9,20 @@ import (
 
 	"github.com/ralph/tuon/internal/auth"
 	"github.com/ralph/tuon/internal/store"
+	"github.com/ralph/tuon/internal/vault"
 )
 
 func TestSwitchAccountClearsData(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("USERPROFILE", home) // Windows
-	st, err := store.Open()
+	v, err := vault.CreatePassphrase(store.Dir(), "correct horse battery")
+	if err != nil {
+		t.Fatal(err)
+	}
+	vlt = v
+	defer func() { vlt = nil }()
+	st, err := openStore()
 	if err != nil {
 		t.Fatal(err)
 	}

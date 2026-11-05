@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
@@ -14,7 +15,9 @@ import (
 
 	"github.com/ralph/tuon/internal/auth"
 	"github.com/ralph/tuon/internal/connector/messenger"
+	"github.com/ralph/tuon/internal/keystore"
 	"github.com/ralph/tuon/internal/store"
+	"github.com/ralph/tuon/internal/vault"
 )
 
 // TestLive runs the real Messenger connector against the real store and
@@ -30,11 +33,9 @@ func TestLive(t *testing.T) {
 		t.Skip(err) // tuon is open: don't share its encryption keys
 	}
 	defer release()
-	st, err := store.Open()
-	if err != nil {
-		t.Fatal(err)
-	}
+	st, creds, kdb := liveOpen(t)
 	defer st.Close()
+	defer kdb.Close()
 
 	logf, _ := os.Create(filepath.Join(t.TempDir(), "live.log"))
 	zerolog.SetGlobalLevel(zerolog.WarnLevel)
@@ -43,7 +44,8 @@ func TestLive(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	conn := messenger.New(liveCreds(t), st.DB, log)
+	conn := messenger.New(creds, st.DB, log)
+	conn.SetKeyDB(kdb) // never AllowNewDevice
 	defer conn.Close()
 
 	m := New(ctx, st, conn, "messenger")
@@ -99,10 +101,31 @@ pump:
 	}
 }
 
-func liveCreds(t *testing.T) auth.Creds {
-	c, err := auth.Load(store.Dir())
+// liveOpen opens the real data the way tuon does: the vault (one Touch
+// ID), tuon.db, the sealed session and keys.db.
+func liveOpen(t *testing.T) (*store.Store, auth.Creds, *sql.DB) {
+	t.Helper()
+	dir := store.Dir()
+	h := vault.FindHelper()
+	if vault.Kind(dir) != vault.KindEnclave || h == nil {
+		t.Skip("needs the Touch ID vault and its helper")
+	}
+	v, err := vault.UnlockEnclave(dir, h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(v.DeriveKey("tuon.db/1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.SetCipher(v)
+	creds, err := auth.LoadSealed(dir, v, false)
 	if err != nil {
 		t.Skip("not logged in")
 	}
-	return c
+	kdb, err := keystore.Open(dir, v.DeriveKey("keys.db/2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return st, creds, kdb
 }

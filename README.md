@@ -183,7 +183,7 @@ The **connector** speaks Messenger's protocol through [mautrix-meta](https://git
 |---|---|
 | `~/.config/tuon/vault.json` | tuon's key, wrapped by your Mac's Secure Enclave (or your passphrase): useless on its own |
 | `~/.config/tuon/login.enc` | Your session, encrypted |
-| `~/.config/tuon/tuon.db` | Chats, folders, the newest 1,000 messages per chat; message text, previews, drafts and backup keys encrypted |
+| `~/.config/tuon/tuon.db` | Chats, folders, contacts, the newest 1,000 messages per chat: the whole file encrypted page by page, message text sealed again inside it |
 | `~/.config/tuon/keys.db` | Keys for encrypted chats, encrypted page by page |
 | `~/.config/tuon/tuon.log` | Warnings and errors; starts over past 5 MB |
 

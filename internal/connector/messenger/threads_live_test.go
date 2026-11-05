@@ -11,8 +11,6 @@ import (
 
 	"github.com/ralph/tuon/internal/connector"
 
-	"github.com/ralph/tuon/internal/auth"
-	"github.com/ralph/tuon/internal/store"
 )
 
 // TUON_LIVE=1 go test ./internal/connector/messenger -run TestLiveThreads -v
@@ -23,21 +21,10 @@ func TestLiveThreads(t *testing.T) {
 	if os.Getenv("TUON_LIVE") == "" {
 		t.Skip("set TUON_LIVE=1")
 	}
-	release, err := store.Lock()
-	if err != nil {
-		t.Skip(err)
-	}
+	st, kdb, creds, release := liveSetup(t)
 	defer release()
-	st, err := store.Open()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close()
-	creds, err := auth.Load(store.Dir())
-	if err != nil {
-		t.Fatal(err)
-	}
 	c := New(creds, st.DB, zerolog.New(zerolog.NewTestWriter(t)).Level(zerolog.ErrorLevel))
+	c.SetKeyDB(kdb)
 	c.fetchOnce.Do(func() {}) // run the paging by hand below
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
@@ -98,21 +85,10 @@ func TestLivePaging(t *testing.T) {
 	if os.Getenv("TUON_LIVE") == "" {
 		t.Skip("set TUON_LIVE=1")
 	}
-	release, err := store.Lock()
-	if err != nil {
-		t.Skip(err)
-	}
+	st, kdb, creds, release := liveSetup(t)
 	defer release()
-	st, err := store.Open()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close()
-	creds, err := auth.Load(store.Dir())
-	if err != nil {
-		t.Fatal(err)
-	}
 	c := New(creds, st.DB, zerolog.New(zerolog.NewTestWriter(t)).Level(zerolog.WarnLevel))
+	c.SetKeyDB(kdb)
 	c.fetchOnce.Do(func() {}) // run it by hand below
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()

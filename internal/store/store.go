@@ -4,6 +4,7 @@ package store
 
 import (
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,7 +13,8 @@ import (
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite"
+	_ "github.com/ncruces/go-sqlite3/driver" // registers "sqlite3"
+	_ "github.com/ncruces/go-sqlite3/vfs/adiantum"
 
 	"github.com/ralph/tuon/internal/connector"
 )
@@ -161,23 +163,160 @@ func Dir() string {
 	return filepath.Join(home, ".config", "tuon")
 }
 
-// Open opens ~/.config/tuon/tuon.db.
-func Open() (*Store, error) {
+// Open opens ~/.config/tuon/tuon.db, encrypted with key (32 bytes, from
+// tuon's vault). A plain tuon.db from an older version is converted.
+func Open(key []byte) (*Store, error) {
 	if err := os.MkdirAll(Dir(), 0o700); err != nil {
 		return nil, err
 	}
-	return OpenPath(filepath.Join(Dir(), "tuon.db"))
+	return OpenEncrypted(filepath.Join(Dir(), "tuon.db"), key)
 }
 
+// OpenPath opens an unencrypted database (tests, and installs without a
+// vault). tuon itself uses OpenEncrypted.
 func OpenPath(path string) (*Store, error) {
-	// secure_delete: deleted or overwritten rows are zeroed on disk, so old
-	// plain copies of encrypted text don't linger in free pages
-	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=secure_delete(1)")
+	return openDSN(path, dsn(path, ""), func(err error) error { return err })
+}
+
+// pragmas: secure_delete zeroes deleted or overwritten rows on disk, so old
+// copies don't linger in free pages.
+const pragmas = "&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=secure_delete(1)"
+
+func dsn(path, hexKey string) string {
+	if hexKey == "" {
+		return "file:" + path + "?mode=rwc" + pragmas
+	}
+	// quoted: an unquoted hex key that starts with a digit is a syntax error
+	return "file:" + path + "?vfs=adiantum&_pragma=hexkey('" + hexKey + "')" + pragmas
+}
+
+// OpenEncrypted opens tuon.db encrypted page by page (Adiantum, like
+// keys.db) with a 32-byte key. A database still in the clear (from before)
+// is converted first: copied into a new encrypted file, checked, and only
+// then swapped in.
+func OpenEncrypted(path string, key []byte) (*Store, error) {
+	if len(key) != 32 {
+		return nil, errors.New("database key must be 32 bytes")
+	}
+	hexKey := hex.EncodeToString(key)
+	// errors from the driver can quote the DSN, key included: never pass
+	// them on as they are
+	scrub := func(err error) error {
+		if err == nil {
+			return nil
+		}
+		return errors.New(strings.ReplaceAll(err.Error(), hexKey, "<key>"))
+	}
+	if IsPlain(path) {
+		if err := encryptFile(path, hexKey); err != nil {
+			return nil, fmt.Errorf("encrypting the database: %w", scrub(err))
+		}
+	}
+	st, err := openDSN(path, dsn(path, hexKey), scrub)
 	if err != nil {
 		return nil, err
 	}
+	return st, nil
+}
+
+// IsPlain reports whether the file at path is an unencrypted SQLite file.
+func IsPlain(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	head := make([]byte, 16)
+	n, _ := f.Read(head)
+	return n == 16 && string(head) == "SQLite format 3\x00"
+}
+
+// encryptFile converts a plain database to an encrypted one in place:
+// VACUUM INTO a new encrypted file, compare every table's row count, then
+// rename it over the old one and drop the old WAL. A crash before the
+// rename leaves the plain file as it was (the next start tries again).
+func encryptFile(path, hexKey string) error {
+	plain, err := sql.Open("sqlite3", "file:"+path+"?mode=rw&_pragma=busy_timeout(5000)")
+	if err != nil {
+		return err
+	}
+	defer plain.Close()
+	if _, err := plain.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`); err != nil {
+		return err
+	}
+	tmp := path + ".enc"
+	for _, f := range []string{tmp, tmp + "-wal", tmp + "-shm", tmp + "-journal"} {
+		_ = os.Remove(f)
+	}
+	target := "file:" + tmp + "?vfs=adiantum&hexkey=" + hexKey
+	if _, err := plain.Exec(`VACUUM INTO ?`, target); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	enc, err := sql.Open("sqlite3", dsn(tmp, hexKey))
+	if err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	same, err := sameCounts(plain, enc)
+	enc.Close()
+	if err != nil || !same {
+		_ = os.Remove(tmp)
+		if err == nil {
+			err = errors.New("the encrypted copy doesn't match")
+		}
+		return err
+	}
+	plain.Close()
+	_ = os.Chmod(tmp, 0o600)
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	for _, f := range []string{path + "-wal", path + "-shm", tmp + "-wal", tmp + "-shm"} {
+		_ = os.Remove(f)
+	}
+	return nil
+}
+
+// sameCounts compares every table's row count between two databases.
+func sameCounts(a, b *sql.DB) (bool, error) {
+	rows, err := a.Query(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite\_%' ESCAPE '\'`)
+	if err != nil {
+		return false, err
+	}
+	var tables []string
+	for rows.Next() {
+		var n string
+		if rows.Scan(&n) == nil {
+			tables = append(tables, n)
+		}
+	}
+	rows.Close()
+	for _, t := range tables {
+		var na, nb int
+		q := `SELECT count(*) FROM "` + strings.ReplaceAll(t, `"`, `""`) + `"`
+		if err := a.QueryRow(q).Scan(&na); err != nil {
+			return false, err
+		}
+		if err := b.QueryRow(q).Scan(&nb); err != nil {
+			return false, err
+		}
+		if na != nb {
+			return false, nil
+		}
+	}
+	return len(tables) > 0, nil
+}
+
+func openDSN(path, dsn string, scrub func(error) error) (*Store, error) {
+	db, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		return nil, scrub(err)
+	}
+	// a wrong key shows up on the first statement: the header won't decrypt
 	if _, err := db.Exec(schema); err != nil {
-		return nil, fmt.Errorf("db schema: %w", err)
+		db.Close()
+		return nil, fmt.Errorf("db schema: %w", scrub(err))
 	}
 	// columns added after the first release (ignore "duplicate column")
 	_, _ = db.Exec(`ALTER TABLE tuon_messages ADD COLUMN pending INTEGER NOT NULL DEFAULT 0`)
@@ -1038,7 +1177,11 @@ func (s *Store) Merge(from, to string) error {
 		`DELETE FROM tuon_chats WHERE id = ?1`,
 	}
 	for _, q := range steps {
-		if _, err := tx.Exec(q, from, to); err != nil {
+		args := []any{from, to}
+		if !strings.Contains(q, "?2") { // the driver wants exactly the parameters used
+			args = args[:1]
+		}
+		if _, err := tx.Exec(q, args...); err != nil {
 			return err
 		}
 	}

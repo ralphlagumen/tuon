@@ -34,7 +34,7 @@ func liveSetup(t *testing.T) (st *store.Store, kdb *sql.DB, creds auth.Creds, re
 		release()
 		t.Fatal(err)
 	}
-	if st, err = store.Open(); err != nil {
+	if st, err = store.Open(v.DeriveKey("tuon.db/1")); err != nil {
 		release()
 		t.Fatal(err)
 	}

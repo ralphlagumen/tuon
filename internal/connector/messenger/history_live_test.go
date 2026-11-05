@@ -8,8 +8,6 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"github.com/ralph/tuon/internal/auth"
-	"github.com/ralph/tuon/internal/store"
 )
 
 // TUON_LIVE=1 TUON_CHAT=<id> go test ./internal/connector/messenger -run TestLiveHistory -v
@@ -20,21 +18,10 @@ func TestLiveHistory(t *testing.T) {
 	if os.Getenv("TUON_LIVE") == "" || chat == "" {
 		t.Skip("set TUON_LIVE=1 TUON_CHAT=<id>")
 	}
-	release, err := store.Lock()
-	if err != nil {
-		t.Skip(err)
-	}
+	st, kdb, creds, release := liveSetup(t)
 	defer release()
-	st, err := store.Open()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close()
-	creds, err := auth.Load(store.Dir())
-	if err != nil {
-		t.Fatal(err)
-	}
 	c := New(creds, st.DB, zerolog.New(zerolog.NewTestWriter(t)).Level(zerolog.WarnLevel))
+	c.SetKeyDB(kdb)
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	if err := c.Start(ctx); err != nil {

@@ -197,7 +197,7 @@ func sameAccount(creds auth.Creds) (bool, error) {
 	if _, err := os.Stat(filepath.Join(store.Dir(), "tuon.db")); err != nil {
 		return true, nil // nothing stored yet
 	}
-	st, err := store.Open()
+	st, err := openStore()
 	if err != nil {
 		return false, err
 	}

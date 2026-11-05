@@ -18,6 +18,16 @@ import (
 	"github.com/ralph/tuon/internal/vault"
 )
 
+// openStore opens tuon.db, encrypted with a key from the vault (unlocking
+// it first if this run hasn't yet).
+func openStore() (*store.Store, error) {
+	v, err := openVault()
+	if err != nil {
+		return nil, err
+	}
+	return store.Open(v.DeriveKey("tuon.db/1"))
+}
+
 // vlt is the unlocked vault for this run (nil until openVault).
 var vlt *vault.Vault
 

@@ -33,8 +33,8 @@ While you chat, tuon runs inside a macOS sandbox that limits what it can touch o
 ## Data on your computer
 
 - Tuon creates its folder (`~/.config/tuon`) and files readable only by you, and fixes the permissions of older files on startup.
-- **Encrypted with tuon's key:** your session (`login.enc`), message text, attachment details (including the keys that open encrypted photos and files), chat previews, drafts, backup keys (in `tuon.db`), and every key for encrypted chats: this device's private keys and your sessions with contacts (`keys.db`, encrypted page by page). Deleted database rows are overwritten; deleted files aren't, and on SSDs nothing is guaranteed gone.
-- **Not encrypted:** chat and contact names, folders, times, reactions, message and sender IDs and settings. Keep full-disk encryption on (FileVault, BitLocker) for those.
+- **Encrypted with tuon's key:** your session (`login.enc`); all of `tuon.db`, page by page (chat and contact names, folders, messages, reactions, times, settings), with message text, attachment details, previews, drafts and backup keys sealed a second time inside it; and every key for encrypted chats (`keys.db`, also page by page). The first start after updating converts an older, unencrypted `tuon.db`. Deleted database rows are overwritten; deleted files aren't, and on SSDs nothing is guaranteed gone (the unencrypted `tuon.db` an older version left behind included).
+- **Not encrypted:** `tuon.log` (warnings: IDs, no message text), the size and dates of tuon's files, and `vault.json` (tuon's key, wrapped: useless without your Touch ID or passphrase). Keep full-disk encryption on (FileVault, BitLocker) as well.
 - **Photos shown in the chat** (Ghostty, kitty, WezTerm) go straight to the terminal as data and are never written to disk. Older versions kept a plain photo cache in `cache/img`; tuon deletes it on start.
 - Photos opened in your photo viewer go to a temporary folder that's deleted when Tuon starts and quits.
 - The log holds warnings only. `TUON_DEBUG=1` logs much more, which can include message details. Use it only for troubleshooting, and delete `tuon.log` after.

@@ -23,7 +23,7 @@ func TestNewDeviceOnlyAfterRelink(t *testing.T) {
 	}
 	vlt = v
 	defer func() { vlt = nil }()
-	st, err := store.Open()
+	st, err := openStore()
 	if err != nil {
 		t.Fatal(err)
 	}

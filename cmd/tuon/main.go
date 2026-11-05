@@ -122,7 +122,7 @@ func run() error {
 	cleanTemp()
 	defer cleanTemp()
 
-	st, err := store.Open()
+	st, err := openStore()
 	if err != nil {
 		return err
 	}
