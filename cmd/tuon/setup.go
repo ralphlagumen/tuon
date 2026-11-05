@@ -281,9 +281,13 @@ func privateFiles() {
 // cleanTemp deletes photos written for the system viewer.
 func cleanTemp() { _ = os.RemoveAll(filepath.Join(os.TempDir(), "tuon")) }
 
-// removePhotoCache deletes the photo cache older versions kept as plain
-// PNGs: photos now go to the terminal without touching the disk.
-func removePhotoCache() { _ = os.RemoveAll(filepath.Join(store.Dir(), "cache", "img")) }
+// removeRetired deletes what older versions kept and nothing uses now: the
+// plain PNG photo cache (photos now go to the terminal without touching the
+// disk) and `source`, the clone path `tuon update` no longer trusts.
+func removeRetired() {
+	_ = os.RemoveAll(filepath.Join(store.Dir(), "cache", "img"))
+	_ = os.Remove(filepath.Join(store.Dir(), "source"))
+}
 
 // trimLog keeps the log from growing forever: past 5 MB, start fresh.
 func trimLog(path string) {
