@@ -142,6 +142,7 @@ func (c *Conn) SetKeyDB(db *sql.DB) { c.keyDB = db }
 // New makes a Messenger connector from a saved login.
 // db holds the encrypted-chat keys (shared with Tuon's own store).
 func New(creds auth.Creds, db *sql.DB, log zerolog.Logger) *Conn {
+	setupSignalLog(log)
 	return &Conn{
 		creds:      creds,
 		db:         db,

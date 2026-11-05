@@ -8,9 +8,6 @@ import (
 
 	"github.com/rs/zerolog"
 	waTypes "go.mau.fi/whatsmeow/types"
-
-	"github.com/ralph/tuon/internal/auth"
-	"github.com/ralph/tuon/internal/store"
 )
 
 // TUON_LIVE=1 go test ./internal/connector/messenger -run TestLiveKeys -v
@@ -21,21 +18,10 @@ func TestLiveKeys(t *testing.T) {
 	if os.Getenv("TUON_LIVE") == "" {
 		t.Skip("set TUON_LIVE=1")
 	}
-	release, err := store.Lock()
-	if err != nil {
-		t.Skip(err)
-	}
+	st, kdb, creds, release := liveSetup(t)
 	defer release()
-	st, err := store.Open()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close()
-	creds, err := auth.Load(store.Dir())
-	if err != nil {
-		t.Fatal(err)
-	}
 	c := New(creds, st.DB, zerolog.New(zerolog.NewTestWriter(t)).Level(zerolog.ErrorLevel))
+	c.SetKeyDB(kdb) // never AllowNewDevice: a diagnostic must not register anything
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	if err := c.Start(ctx); err != nil {
@@ -66,6 +52,27 @@ func TestLiveKeys(t *testing.T) {
 	me := *dev.ID
 	t.Logf("our device: %s", me.String())
 
+	// every device on the account, as Meta's server lists them
+	if devs, err := wa.GetUserDevicesContext(ctx, []waTypes.JID{me.ToNonAD()}); err == nil {
+		var nums []uint16
+		for _, d := range devs {
+			nums = append(nums, d.Device)
+		}
+		t.Logf("devices on the account (server): %v", nums)
+	} else {
+		t.Logf("device list: %v", err)
+	}
+	for round := 2; round <= 4; round++ { // a few more bundles: each hands out a different one-time key
+		b := wa.DangerousInternals().FetchPreKeysNoError(ctx, []waTypes.JID{me})[me]
+		if b == nil || b.PreKeyID() == nil || b.PreKeyID().IsEmpty {
+			t.Logf("bundle %d: no one-time key", round)
+			continue
+		}
+		local, err := dev.PreKeys.GetPreKey(ctx, b.PreKeyID().Value)
+		t.Logf("bundle %d: one-time key %d match=%v (local err %v), signed key %d match=%v", round, b.PreKeyID().Value,
+			err == nil && local != nil && b.PreKey().PublicKey() == *local.Pub, err,
+			b.SignedPreKeyID(), b.SignedPreKey().PublicKey() == *dev.SignedPreKey.Pub)
+	}
 	bundles := wa.DangerousInternals().FetchPreKeysNoError(ctx, []waTypes.JID{me})
 	b := bundles[me]
 	if b == nil {
