@@ -15,7 +15,8 @@ command -v go >/dev/null 2>&1 || { say "Go is needed to build tuon: brew install
 
 say "Building tuon…"
 mkdir -p bin
-go build -trimpath -ldflags "-s -w" -o bin/tuon ./cmd/tuon
+# sourceDir lets `tuon update` find this clone later
+go build -trimpath -ldflags "-s -w -X main.sourceDir=$(pwd)" -o bin/tuon ./cmd/tuon
 
 if [ "$(uname)" = "Darwin" ] && [ ! -d /Applications/Ghostty.app ] && [ ! -d "$HOME/Applications/Ghostty.app" ]; then
   if command -v brew >/dev/null 2>&1; then

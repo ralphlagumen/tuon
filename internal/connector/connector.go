@@ -73,9 +73,11 @@ type Mention struct {
 	Name   string
 }
 
-// Person is someone found by a people search.
+// Person is someone (or, with Group, a group chat) found by a search.
 type Person struct {
-	ID, Name string
+	ID, Name  string
+	Group     bool // a group chat: ID is its chat ID
+	Encrypted bool
 }
 
 // Attachment is a file to send.
@@ -127,6 +129,9 @@ type Connector interface {
 	Send(ctx context.Context, chatID, text string, mentions []Mention, reply *ReplyRef) error
 	// SearchPeople asks the platform who matches a name.
 	SearchPeople(ctx context.Context, query string) ([]Person, error)
+	// LookupPeople asks for the names of people tuon has no name for;
+	// they arrive as ContactEvents.
+	LookupPeople(ctx context.Context, userIDs []string)
 	// OpenDirect gets the 1:1 chat with a person ready to use (it may not be
 	// in the chat list yet). The chat ID it returns is what Send takes.
 	OpenDirect(ctx context.Context, userID string) (string, error)

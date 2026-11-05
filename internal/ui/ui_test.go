@@ -32,6 +32,7 @@ type fakeConn struct {
 	known     []connector.Chat
 	directory []connector.Person // what SearchPeople finds
 	opened    []string
+	looked    []string
 	files     []connector.Attachment
 	sent      []sent
 	reacted   []reacted
@@ -57,6 +58,7 @@ func (f *fakeConn) SearchPeople(_ context.Context, q string) ([]connector.Person
 	}
 	return out, nil
 }
+func (f *fakeConn) LookupPeople(_ context.Context, ids []string) { f.looked = append(f.looked, ids...) }
 func (f *fakeConn) OpenDirect(_ context.Context, userID string) (string, error) {
 	f.opened = append(f.opened, userID)
 	return userID, nil
@@ -918,5 +920,73 @@ func TestInboxCantBeDeleted(t *testing.T) {
 	}
 	if !found || st.DeleteSpace(store.Inbox) == nil {
 		t.Fatal("Inbox must not be deletable")
+	}
+}
+
+func TestGroupSearch(t *testing.T) {
+	m, st, fc := newTestModel(t, 100, 30)
+	fc.directory = []connector.Person{{ID: "777", Name: "Jayson & Friends", Group: true}}
+	m = seed(m)
+	m = key(m, "/")
+	var cmd tea.Cmd
+	for _, r := range "jayson & friends" {
+		var next tea.Model
+		next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m = next.(Model)
+	}
+	m = run(m, cmd)
+	if s := screen(m); !strings.Contains(s, "Jayson & Friends") || !strings.Contains(s, "Group chat · enter to") {
+		t.Fatalf("group not listed:\n%s", s)
+	}
+	for i := 0; i < 10 && (m.personAt(m.cursor) == nil || !m.personAt(m.cursor).Group); i++ {
+		m = key(m, "down")
+	}
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = run(next.(Model), cmd)
+	if len(fc.opened) != 0 {
+		t.Fatalf("a group isn't a 1:1: opened %v", fc.opened)
+	}
+	if m.chat == nil || m.chat.ID != "777" || m.chat.Display != "Jayson & Friends" || !m.chat.Group || !m.composing() {
+		t.Fatalf("group not opened ready to type: %+v", m.chat)
+	}
+	if c, _ := st.Chat("777"); c.Encrypted {
+		t.Fatal("a plain group must not be marked encrypted")
+	}
+}
+
+func TestImagesCommandSaysWhatHappened(t *testing.T) {
+	m, st, _ := newTestModel(t, 160, 30)
+	m.kitty = nil // a terminal without photo support
+	for _, c := range []string{"images off", "images on"} {
+		next, _ := m.runCommand(c)
+		m = next.(Model)
+		if !strings.Contains(m.toast, "can't show photos") {
+			t.Fatalf(":%s gave no feedback: %q", c, m.toast)
+		}
+	}
+	next, _ := m.runCommand("images off")
+	if m = next.(Model); m.imagesOn || st.Setting(settingImage, "on") != "off" {
+		t.Fatal(":images off didn't stick")
+	}
+}
+
+func TestUnknownSenderNameIsLookedUp(t *testing.T) {
+	m, st, fc := newTestModel(t, 120, 30)
+	now := time.Now()
+	_ = st.UpsertChat(connector.Chat{ID: "g1", Name: "Jayson & Friends", Group: true, LastActivity: now})
+	_, _ = st.AddMessage(connector.Message{ID: "x1", ChatID: "g1", SenderID: "100000109217940", Text: "Mga 5 years", Time: now}, false)
+	m.reloadChats()
+	c, _ := st.Chat("g1")
+	m = run(m, m.openChat(c))
+	if len(fc.looked) != 1 || fc.looked[0] != "100000109217940" {
+		t.Fatalf("looked up %v", fc.looked)
+	}
+	_ = m.reloadMessages() // asks only once per run
+	if len(fc.looked) != 1 {
+		t.Fatalf("asked again: %v", fc.looked)
+	}
+	next, _ := m.Update(EventsMsg{connector.ContactEvent{ID: "100000109217940", Name: "Ed Hipolito"}})
+	if s := screen(next.(Model)); !strings.Contains(s, "Ed") || strings.Contains(s, "…7940") {
+		t.Fatalf("name not shown:\n%s", s)
 	}
 }

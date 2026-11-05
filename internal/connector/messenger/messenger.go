@@ -987,6 +987,23 @@ func (c *Conn) KnowChat(ch connector.Chat) {
 
 // ---- people ----
 
+// LookupPeople fetches names for senders we only know by ID (for example
+// in a group opened from search, whose member list never synced).
+func (c *Conn) LookupPeople(ctx context.Context, userIDs []string) {
+	for _, u := range userIDs {
+		uid, err := strconv.ParseInt(u, 10, 64)
+		if err != nil || uid == 0 {
+			continue
+		}
+		resp, err := c.cli.ExecuteTasks(ctx, &socket.GetContactsFullTask{ContactID: uid})
+		if err != nil {
+			c.log.Warn().Err(err).Msg("couldn't look up a name")
+			continue
+		}
+		c.handleTable(resp)
+	}
+}
+
 func (c *Conn) SearchPeople(ctx context.Context, query string) ([]connector.Person, error) {
 	resp, err := c.cli.ExecuteTasks(ctx, &socket.SearchUserTask{
 		Query: query,
@@ -1001,6 +1018,21 @@ func (c *Conn) SearchPeople(ctx context.Context, query string) ([]connector.Pers
 	var out []connector.Person
 	seen := map[int64]bool{}
 	for _, r := range resp.LSInsertSearchResult {
+		if !r.ThreadType.IsOneToOne() { // a group chat you're in
+			key, _ := strconv.ParseInt(r.ResultId, 10, 64)
+			if key == 0 || seen[key] || r.DisplayName == "" {
+				continue
+			}
+			seen[key] = true
+			c.mu.Lock()
+			if _, known := c.threadType[key]; !known {
+				c.threadType[key] = r.ThreadType
+			}
+			c.mu.Unlock()
+			out = append(out, connector.Person{ID: id(key), Name: clean(r.DisplayName), Group: true,
+				Encrypted: r.ThreadType.IsWhatsApp()})
+			continue
+		}
 		fbid := r.GetFBID()
 		canMessage := r.CanViewerMessage || (r.OtherUserId != 0 && r.BlockedByViewerStatus == 0)
 		if !r.ThreadType.IsOneToOne() || !canMessage || fbid == 0 || fbid == c.self || seen[fbid] {

@@ -60,9 +60,12 @@ type ReactionCount struct {
 	Mine  bool
 }
 
-// Person is someone you can @mention in a chat.
+// Person is someone you can @mention in a chat, or a search result
+// (Group: a group chat not in the list yet).
 type Person struct {
-	ID, Name string
+	ID, Name  string
+	Group     bool
+	Encrypted bool
 }
 
 const schema = `

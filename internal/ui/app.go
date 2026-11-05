@@ -98,6 +98,7 @@ type Model struct {
 	loadingOlder bool
 	synced       map[string]bool // encrypted chats already filled from the PIN backup this run
 	refilling    map[string]bool // chats waiting to refill a message that couldn't be decrypted
+	askedName    map[string]bool // senders whose name we already asked Messenger for
 	reacting     bool            // reaction picker open
 	selecting    bool            // stepping through messages (react, photo); else typing
 
@@ -319,8 +320,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		selected := m.rowKey(m.cursor) // keep the highlight on the same row's person
 		m.remote = nil
 		for _, p := range msg.people {
-			_ = m.st.UpsertContact(p.ID, p.Name)
-			m.remote = append(m.remote, store.Person{ID: p.ID, Name: p.Name})
+			if !p.Group {
+				_ = m.st.UpsertContact(p.ID, p.Name)
+			}
+			m.remote = append(m.remote, store.Person{ID: p.ID, Name: p.Name, Group: p.Group, Encrypted: p.Encrypted})
 		}
 		m.updatePeople()
 		m.restoreCursor(selected)
@@ -487,8 +490,9 @@ func (m *Model) reloadMessages() tea.Cmd {
 	m.msgs, _ = m.st.Messages(m.chat.ID, pageSize, m.conn.SelfID())
 	m.people, _ = m.st.People(m.chat.ID, m.conn.SelfID())
 	m.keepSelectionVisible()
+	lookup := m.lookupNames()
 	if !m.drawsPhotos() {
-		return nil // photos show as "View photo": load them only when opened
+		return lookup // photos show as "View photo": load them only when opened
 	}
 	var cmds []tea.Cmd
 	// only the most recent photos, so opening a chat stays fast
@@ -499,7 +503,33 @@ func (m *Model) reloadMessages() tea.Cmd {
 			}
 		}
 	}
-	return tea.Batch(cmds...)
+	return tea.Batch(append(cmds, lookup)...)
+}
+
+// lookupNames asks Messenger, once per run, for the names of senders in
+// the open chat that tuon only knows by ID.
+func (m *Model) lookupNames() tea.Cmd {
+	var ids []string
+	for _, msg := range m.msgs {
+		if msg.SenderName != "" || msg.FromMe || msg.SenderID == "" || m.askedName[msg.SenderID] {
+			continue
+		}
+		if m.askedName == nil {
+			m.askedName = map[string]bool{}
+		}
+		m.askedName[msg.SenderID] = true
+		ids = append(ids, msg.SenderID)
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	conn, ctx := m.conn, m.ctx
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		defer cancel()
+		conn.LookupPeople(ctx, ids)
+		return nil
+	}
 }
 
 // drawsPhotos: whether this terminal shows photos in the chat at all.
@@ -967,10 +997,25 @@ func (m Model) runCommand(cmd string) (tea.Model, tea.Cmd) {
 		m.blocks = cmd == "images blocks"
 		_ = m.st.SetSetting(settingBlocks, map[bool]string{true: "on", false: "off"}[m.blocks])
 		return m, m.flash(map[bool]string{true: "Pixel previews on", false: "Pixel previews off"}[m.blocks])
-	case "images off", "images on":
-		m.imagesOn = cmd == "images on"
-		_ = m.st.SetSetting(settingImage, strings.TrimPrefix(cmd, "images "))
-		return m, m.reloadMessages()
+	case "images off", "images on", "images", "photos off", "photos on", "photos":
+		switch {
+		case strings.HasSuffix(cmd, " on"):
+			m.imagesOn = true
+		case strings.HasSuffix(cmd, " off"):
+			m.imagesOn = false
+		default:
+			m.imagesOn = !m.imagesOn
+		}
+		_ = m.st.SetSetting(settingImage, map[bool]string{true: "on", false: "off"}[m.imagesOn])
+		note := "Photos off: they show as a View photo button"
+		switch {
+		case m.kitty == nil:
+			// Terminal.app and the like can't draw photos at all
+			note = "This terminal can't show photos in the chat, so photos stay as View photo buttons either way. Ghostty, kitty or WezTerm show them."
+		case m.imagesOn:
+			note = "Photos on"
+		}
+		return m, tea.Batch(m.reloadMessages(), m.flash(note))
 	case "help":
 		m.mode = modeHelp
 	case "":
@@ -1861,12 +1906,19 @@ func (m *Model) updatePeople() {
 
 // openPerson opens your 1:1 chat with someone found in search.
 func (m *Model) openPerson(p store.Person) tea.Cmd {
-	chatID, err := m.conn.OpenDirect(m.ctx, p.ID)
-	if err != nil {
-		return m.flash("couldn't open chat: " + err.Error())
-	}
-	if err := m.st.EnsureChat(chatID, true); err != nil {
-		return m.flash(err.Error())
+	chatID := p.ID
+	if p.Group { // a group not in the list yet: add it, then load its messages
+		if err := m.st.UpsertChat(connector.Chat{ID: chatID, Name: p.Name, Group: true, Encrypted: p.Encrypted}); err != nil {
+			return m.flash(err.Error())
+		}
+	} else {
+		var err error
+		if chatID, err = m.conn.OpenDirect(m.ctx, p.ID); err != nil {
+			return m.flash("couldn't open chat: " + err.Error())
+		}
+		if err := m.st.EnsureChat(chatID, true); err != nil {
+			return m.flash(err.Error())
+		}
 	}
 	c, err := m.st.Chat(chatID)
 	if err != nil {

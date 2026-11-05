@@ -47,6 +47,11 @@ func main() {
 				fail(err)
 			}
 			return
+		case "update":
+			if err := update(); err != nil {
+				fail(err)
+			}
+			return
 		case "logout":
 			if err := logout(len(args) > 1 && args[1] == "--wipe"); err != nil {
 				fail(err)

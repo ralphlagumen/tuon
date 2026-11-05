@@ -48,3 +48,11 @@ open it · `:` commands (`:mute`, `:sound`, `:images off`, `:quit`).
 
 **Not checked this pass:** live run against the real account (folder counts, search people results), how `?` help
 lists these keys, Unread tab behaviour when its last chat gets read while you're on it.
+
+## Found live 2026-11-05
+
+| ID | Gap | Sev | Tag |
+|---|---|---|---|
+| G10 | `/` couldn't find a group not in the local list ("Jayson & Friends"). Messenger's search returned groups, but `SearchPeople` dropped every result that wasn't a 1:1. Fix built: group results show as "Group chat · enter to open" and open as a group (`messenger.go` `SearchPeople`, `app.go` `openPerson`). | P1 | ✔ db (group absent) · fixed, confirmed live by Ralph 2026-11-05 |
+| G11 | Only Messenger's first page of chats is loaded (44 chats in `tuon_chats`). Older chats never show in folders until they get a new message. Needs thread paging (`FetchThreadsTask`, as in mautrix-meta `threadbackfill.go`). | P1 | ✔ db count · not built |
+| G12 | A group opened from search had no member list, so a sender with no saved contact showed as "…7940" (`views.go` `senderLabel`). Fix built: tuon asks Messenger once per run for unknown sender names (`LookupPeople`, `GetContactsFullTask`). | P2 | ✔ db (no contact, 0 participants) · fix built, live check pending |

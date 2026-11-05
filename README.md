@@ -47,6 +47,8 @@ cd tuon
 
 This builds `tuon` into `~/.local/bin`, installs [Ghostty](https://ghostty.org) (the terminal that shows real photos) if you don't have it, then runs `tuon setup`: you log in, and can enter your Messenger PIN to bring back older encrypted chats.
 
+**Updating:** run `tuon update`. It pulls the latest changes into the folder you installed from and rebuilds `tuon` in place. Restart tuon afterwards if it was open.
+
 **Linux:** `./install.sh` works the same, minus Ghostty. For photos, use kitty, Ghostty or WezTerm. For copy and paste, install `wl-clipboard` (Wayland) or `xclip` (X11).
 
 **Windows:** build it, then run it in Windows Terminal:

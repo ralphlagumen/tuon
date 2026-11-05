@@ -25,6 +25,7 @@ const usage = `tuon: calm, chat-only Messenger
   tuon setup           log in and restore older encrypted chats (run by install.sh)
   tuon login           log in again (when Messenger logs you out)
   tuon history         restore older encrypted chats with your Messenger PIN
+  tuon update          pull the latest tuon and rebuild this program
   tuon logout          forget your login on this computer
   tuon logout --wipe   also delete all of tuon's data on this computer
   tuon --help          this help

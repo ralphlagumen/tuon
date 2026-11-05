@@ -299,7 +299,11 @@ func (m Model) personRow(p store.Person, selected bool, lw int) []string {
 		edge = sAccent.Render("▎")
 	}
 	l1 := edge + sAccent.Render("@") + " " + sText.Render(fit(termSafe(p.Name), lw-4)) + " "
-	l2 := edge + "  " + sMuted.Render(fit("Person · enter to message", lw-4)) + " "
+	what := "Person · enter to message"
+	if p.Group {
+		what = "Group chat · enter to open"
+	}
+	l2 := edge + "  " + sMuted.Render(fit(what, lw-4)) + " "
 	if selected && m.focus == focusList {
 		band := func(s string) string {
 			return sSelBand.Render(strings.ReplaceAll(fit(s, lw), "\x1b[0m", "\x1b[0m"+bgSeq(cSelBand)))
@@ -377,6 +381,9 @@ func (m Model) chatBody(rw, bh int) []string {
 		hint := "Pick a chat on the left and press enter."
 		if m.personView != nil {
 			hint = "Press enter to message " + termSafe(m.personView.Name) + "."
+			if m.personView.Group {
+				hint = "Press enter to open " + termSafe(m.personView.Name) + "."
+			}
 		}
 		out[bh/2] = strings.Repeat(" ", max(0, (rw-len(hint))/2)) + sMuted.Render(hint)
 		return out
