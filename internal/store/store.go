@@ -1,0 +1,593 @@
+// Package store keeps Tuon's local state in SQLite: chats, their space
+// (work / personal / inbox), contacts, and a message cache.
+package store
+
+import (
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	_ "modernc.org/sqlite"
+
+	"github.com/ralph/tuon/internal/connector"
+)
+
+type Space string
+
+// Folders are yours to add, rename, delete and reorder. Inbox is built in:
+// it holds every chat you haven't put in a folder, and it's always last.
+const (
+	Work     Space = "Work" // starting folders
+	Personal Space = "Personal"
+	Inbox    Space = "inbox"
+)
+
+type Store struct {
+	DB   *sql.DB
+	Self string // our own user ID, left out of group names
+}
+
+type ChatRow struct {
+	connector.Chat
+	Display string // name to show: chat name, else contact name, else ID
+	Space   Space
+	Muted   bool
+}
+
+type MessageRow struct {
+	connector.Message
+	SenderName string
+	Reactions  []ReactionCount
+	MyReaction string
+}
+
+type ReactionCount struct {
+	Emoji string
+	Count int
+	Mine  bool
+}
+
+// Person is someone you can @mention in a chat.
+type Person struct {
+	ID, Name string
+}
+
+const schema = `
+CREATE TABLE IF NOT EXISTS tuon_chats (
+	id        TEXT PRIMARY KEY,
+	name      TEXT    NOT NULL DEFAULT '',
+	snippet   TEXT    NOT NULL DEFAULT '',
+	last_ts   INTEGER NOT NULL DEFAULT 0,
+	unread    INTEGER NOT NULL DEFAULT 0,
+	grp       INTEGER NOT NULL DEFAULT 0,
+	encrypted INTEGER NOT NULL DEFAULT 0,
+	space     TEXT    NOT NULL DEFAULT 'inbox',
+	muted     INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS tuon_contacts (
+	id   TEXT PRIMARY KEY,
+	name TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS tuon_messages (
+	id        TEXT PRIMARY KEY,
+	chat_id   TEXT    NOT NULL,
+	sender_id TEXT    NOT NULL,
+	text      TEXT    NOT NULL,
+	ts        INTEGER NOT NULL,
+	from_me   INTEGER NOT NULL,
+	media     TEXT    NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS tuon_messages_chat ON tuon_messages(chat_id, ts);
+CREATE TABLE IF NOT EXISTS tuon_reactions (
+	message_id TEXT NOT NULL,
+	actor_id   TEXT NOT NULL,
+	chat_id    TEXT NOT NULL,
+	emoji      TEXT NOT NULL,
+	PRIMARY KEY (message_id, actor_id)
+);
+CREATE INDEX IF NOT EXISTS tuon_reactions_chat ON tuon_reactions(chat_id);
+CREATE TABLE IF NOT EXISTS tuon_participants (
+	chat_id  TEXT NOT NULL,
+	user_id  TEXT NOT NULL,
+	nickname TEXT NOT NULL DEFAULT '',
+	PRIMARY KEY (chat_id, user_id)
+);
+CREATE TABLE IF NOT EXISTS tuon_spaces (
+	name TEXT PRIMARY KEY COLLATE NOCASE,
+	pos  INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS tuon_settings (
+	k TEXT PRIMARY KEY,
+	v TEXT NOT NULL
+);`
+
+// Dir is ~/.config/tuon.
+func Dir() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".config", "tuon")
+}
+
+// Open opens ~/.config/tuon/tuon.db.
+func Open() (*Store, error) {
+	if err := os.MkdirAll(Dir(), 0o700); err != nil {
+		return nil, err
+	}
+	return OpenPath(filepath.Join(Dir(), "tuon.db"))
+}
+
+func OpenPath(path string) (*Store, error) {
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
+	if err != nil {
+		return nil, err
+	}
+	if _, err := db.Exec(schema); err != nil {
+		return nil, fmt.Errorf("db schema: %w", err)
+	}
+	// columns added after the first release (ignore "duplicate column")
+	_, _ = db.Exec(`ALTER TABLE tuon_messages ADD COLUMN pending INTEGER NOT NULL DEFAULT 0`)
+	// first run with folders: start with Work and Personal (and move chats
+	// tagged before folders existed)
+	var n int
+	_ = db.QueryRow(`SELECT COUNT(*) FROM tuon_spaces`).Scan(&n)
+	var seeded string
+	_ = db.QueryRow(`SELECT v FROM tuon_settings WHERE k = 'folders'`).Scan(&seeded)
+	if n == 0 && seeded == "" {
+		_, _ = db.Exec(`INSERT INTO tuon_spaces (name, pos) VALUES ('Work', 0), ('Personal', 1)`)
+		_, _ = db.Exec(`UPDATE tuon_chats SET space = 'Work' WHERE space = 'work'`)
+		_, _ = db.Exec(`UPDATE tuon_chats SET space = 'Personal' WHERE space = 'personal'`)
+		_, _ = db.Exec(`INSERT INTO tuon_settings (k, v) VALUES ('folders', 'seeded')`)
+	}
+	_ = os.Chmod(path, 0o600)
+	return &Store{DB: db}, nil
+}
+
+func (s *Store) Close() error { return s.DB.Close() }
+
+func (s *Store) UpsertChat(c connector.Chat) error {
+	_, err := s.DB.Exec(`
+INSERT INTO tuon_chats (id, name, snippet, last_ts, unread, grp, encrypted)
+VALUES (?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+	name      = CASE WHEN excluded.name <> '' THEN excluded.name ELSE name END,
+	snippet   = CASE WHEN excluded.last_ts >= last_ts AND excluded.snippet <> '' THEN excluded.snippet ELSE snippet END,
+	unread    = CASE WHEN excluded.last_ts >= last_ts THEN excluded.unread ELSE unread END,
+	last_ts   = MAX(last_ts, excluded.last_ts),
+	grp       = MAX(grp, excluded.grp),
+	encrypted = MAX(encrypted, excluded.encrypted)`,
+		c.ID, c.Name, c.Snippet, c.LastActivity.UnixMilli(), b2i(c.Unread), b2i(c.Group), b2i(c.Encrypted))
+	return err
+}
+
+func (s *Store) UpsertContact(id, name string) error {
+	_, err := s.DB.Exec(`INSERT INTO tuon_contacts (id, name) VALUES (?, ?)
+ON CONFLICT(id) DO UPDATE SET name = excluded.name`, id, name)
+	return err
+}
+
+// AddMessage saves a message. If it is the newest in its chat, the chat's
+// snippet and time move forward too. Returns true if the message was new.
+func (s *Store) AddMessage(m connector.Message, chatOpen bool) (bool, error) {
+	media := ""
+	if len(m.Media) > 0 {
+		b, _ := json.Marshal(m.Media)
+		media = string(b)
+	}
+	if m.ReplacesID != "" {
+		_, _ = s.DB.Exec(`DELETE FROM tuon_messages WHERE id = ?`, m.ReplacesID)
+	}
+	var exists bool
+	_ = s.DB.QueryRow(`SELECT 1 FROM tuon_messages WHERE id = ?`, m.ID).Scan(&exists)
+	_, err := s.DB.Exec(`INSERT INTO tuon_messages (id, chat_id, sender_id, text, ts, from_me, media, pending)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET text = excluded.text, media = excluded.media, pending = excluded.pending`,
+		m.ID, m.ChatID, m.SenderID, m.Text, m.Time.UnixMilli(), b2i(m.FromMe), media, b2i(m.Pending))
+	if err != nil {
+		return false, err
+	}
+
+	var grp bool
+	_ = s.DB.QueryRow(`SELECT grp FROM tuon_chats WHERE id = ?`, m.ChatID).Scan(&grp)
+	snippet := m.Text
+	if snippet == "" && len(m.Media) > 0 {
+		snippet = "[" + string(m.Media[0].Kind) + "]"
+	}
+	switch {
+	case m.FromMe:
+		snippet = "You: " + snippet
+	case grp:
+		// admin lines ("Vic voted…", "Ann sent 9 photos") already name the sender
+		if name := s.contactName(m.SenderID); name != "" && !strings.HasPrefix(snippet, strings.Fields(name)[0]) {
+			snippet = strings.Fields(name)[0] + ": " + snippet
+		}
+	}
+	unread := !m.FromMe && !chatOpen
+	_, err = s.DB.Exec(`
+INSERT INTO tuon_chats (id, snippet, last_ts, unread) VALUES (?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+	snippet = CASE WHEN excluded.last_ts >= last_ts THEN excluded.snippet ELSE snippet END,
+	unread  = CASE WHEN excluded.last_ts > last_ts THEN excluded.unread ELSE unread END,
+	last_ts = MAX(last_ts, excluded.last_ts)`,
+		m.ChatID, strings.Join(strings.Fields(snippet), " "), m.Time.UnixMilli(), b2i(unread))
+	return !exists, err
+}
+
+func (s *Store) contactName(id string) string {
+	var name string
+	_ = s.DB.QueryRow(`SELECT name FROM tuon_contacts WHERE id = ?`, id).Scan(&name)
+	return name
+}
+
+const chatCols = `c.id, c.name, c.snippet, c.last_ts, c.unread, c.grp, c.encrypted, c.space, c.muted,
+	COALESCE(NULLIF(c.name, ''), ct.name, c.id)`
+
+func scanChat(rows interface{ Scan(...any) error }) (ChatRow, error) {
+	var r ChatRow
+	var ts int64
+	var space string
+	err := rows.Scan(&r.ID, &r.Name, &r.Snippet, &ts, &r.Unread, &r.Group, &r.Encrypted, &space, &r.Muted, &r.Display)
+	r.LastActivity = time.UnixMilli(ts)
+	r.Space = Space(space)
+	if r.Muted {
+		r.Unread = false
+	}
+	return r, err
+}
+
+// Chats lists a space's chats, newest first. A query searches names in
+// every space (case-insensitive).
+func (s *Store) Chats(space Space, query string) ([]ChatRow, error) {
+	rows, err := s.DB.Query(`SELECT `+chatCols+`
+FROM tuon_chats c LEFT JOIN tuon_contacts ct ON ct.id = c.id
+WHERE c.last_ts > 0
+	AND (? <> '' OR c.space = ?)  -- searching looks in every space
+	AND (? = '' OR COALESCE(NULLIF(c.name, ''), ct.name, c.id) LIKE '%' || ? || '%')
+ORDER BY c.last_ts DESC`, query, string(space), query, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ChatRow
+	for rows.Next() {
+		r, err := scanChat(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	for i := range out {
+		s.nameUnnamed(&out[i])
+	}
+	return out, nil
+}
+
+func (s *Store) Chat(id string) (ChatRow, error) {
+	r, err := scanChat(s.DB.QueryRow(`SELECT `+chatCols+`
+FROM tuon_chats c LEFT JOIN tuon_contacts ct ON ct.id = c.id WHERE c.id = ?`, id))
+	if err == nil {
+		s.nameUnnamed(&r)
+	}
+	return r, err
+}
+
+// nameUnnamed labels a chat with no name like Messenger does, from its
+// people: "Sherwin, Ed and 3 others". A chat with several people writing in
+// it is a group even if we never got its details.
+func (s *Store) nameUnnamed(r *ChatRow) {
+	if r.Name != "" || (!r.Group && r.Display != r.ID) {
+		return
+	}
+	people, err := s.People(r.ID, s.Self)
+	if err != nil || len(people) == 0 {
+		return
+	}
+	if len(people) > 1 {
+		r.Group = true
+	}
+	if !r.Group {
+		r.Display = people[0].Name
+		return
+	}
+	var names []string
+	for _, p := range people {
+		names = append(names, strings.Fields(p.Name)[0])
+	}
+	switch n := len(names); {
+	case n <= 3:
+		r.Display = strings.Join(names[:max(0, n-1)], ", ")
+		if n > 1 {
+			r.Display += " and "
+		}
+		r.Display += names[n-1]
+	default:
+		r.Display = fmt.Sprintf("%s, %s and %d others", names[0], names[1], n-2)
+	}
+}
+
+// UnreadCounts returns unread chats per space.
+func (s *Store) UnreadCounts() map[Space]int {
+	out := map[Space]int{}
+	rows, err := s.DB.Query(`SELECT space, COUNT(*) FROM tuon_chats WHERE unread = 1 AND muted = 0 GROUP BY space`)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var sp string
+		var n int
+		if rows.Scan(&sp, &n) == nil {
+			out[Space(sp)] = n
+		}
+	}
+	return out
+}
+
+func (s *Store) SetSpace(chatID string, sp Space) error {
+	_, err := s.DB.Exec(`UPDATE tuon_chats SET space = ? WHERE id = ?`, string(sp), chatID)
+	return err
+}
+
+func (s *Store) ToggleMute(chatID string) error {
+	_, err := s.DB.Exec(`UPDATE tuon_chats SET muted = 1 - muted WHERE id = ?`, chatID)
+	return err
+}
+
+func (s *Store) MarkRead(chatID string) error {
+	_, err := s.DB.Exec(`UPDATE tuon_chats SET unread = 0 WHERE id = ?`, chatID)
+	return err
+}
+
+func (s *Store) RemoveMessage(id string) error {
+	_, err := s.DB.Exec(`DELETE FROM tuon_messages WHERE id = ?`, id)
+	return err
+}
+
+// SetReaction stores one person's reaction; emoji "" removes it.
+func (s *Store) SetReaction(e connector.ReactionEvent) error {
+	if e.Emoji == "" {
+		_, err := s.DB.Exec(`DELETE FROM tuon_reactions WHERE message_id = ? AND actor_id = ?`, e.MessageID, e.ActorID)
+		return err
+	}
+	_, err := s.DB.Exec(`INSERT INTO tuon_reactions (message_id, actor_id, chat_id, emoji) VALUES (?, ?, ?, ?)
+ON CONFLICT(message_id, actor_id) DO UPDATE SET emoji = excluded.emoji`, e.MessageID, e.ActorID, e.ChatID, e.Emoji)
+	return err
+}
+
+func (s *Store) AddParticipant(e connector.ParticipantEvent) error {
+	_, err := s.DB.Exec(`INSERT INTO tuon_participants (chat_id, user_id, nickname) VALUES (?, ?, ?)
+ON CONFLICT(chat_id, user_id) DO UPDATE SET nickname = CASE WHEN excluded.nickname <> '' THEN excluded.nickname ELSE nickname END`,
+		e.ChatID, e.UserID, e.Nickname)
+	return err
+}
+
+// People lists who can be @mentioned in a chat (everyone but selfID):
+// group members, anyone who has written there, or the other person in a 1:1.
+func (s *Store) People(chatID, selfID string) ([]Person, error) {
+	rows, err := s.DB.Query(`
+SELECT u.id, COALESCE(NULLIF(p.nickname, ''), ct.name, '') AS name FROM (
+	SELECT user_id AS id FROM tuon_participants WHERE chat_id = ?1
+	UNION SELECT DISTINCT sender_id FROM tuon_messages WHERE chat_id = ?1
+	UNION SELECT id FROM tuon_chats WHERE id = ?1 AND grp = 0
+) u
+LEFT JOIN tuon_participants p ON p.chat_id = ?1 AND p.user_id = u.id
+LEFT JOIN tuon_contacts ct ON ct.id = u.id
+WHERE u.id <> ?2 AND name <> ''
+ORDER BY name`, chatID, selfID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Person
+	for rows.Next() {
+		var p Person
+		if err := rows.Scan(&p.ID, &p.Name); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// Messages returns the newest `limit` messages of a chat, oldest first,
+// with reactions. selfID marks which reaction is ours.
+func (s *Store) Messages(chatID string, limit int, selfID string) ([]MessageRow, error) {
+	rows, err := s.DB.Query(`SELECT * FROM (
+	SELECT m.id, m.chat_id, m.sender_id, m.text, m.ts, m.from_me, m.media, COALESCE(ct.name, ''), m.pending
+	FROM tuon_messages m LEFT JOIN tuon_contacts ct ON ct.id = m.sender_id
+	WHERE m.chat_id = ? ORDER BY m.ts DESC LIMIT ?
+) ORDER BY 5 ASC`, chatID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []MessageRow
+	for rows.Next() {
+		var r MessageRow
+		var ts int64
+		var media string
+		if err := rows.Scan(&r.ID, &r.ChatID, &r.SenderID, &r.Text, &ts, &r.FromMe, &media, &r.SenderName, &r.Pending); err != nil {
+			return nil, err
+		}
+		r.Time = time.UnixMilli(ts)
+		if media != "" {
+			_ = json.Unmarshal([]byte(media), &r.Media)
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, s.attachReactions(chatID, selfID, out)
+}
+
+func (s *Store) attachReactions(chatID, selfID string, msgs []MessageRow) error {
+	idx := map[string]int{}
+	for i, m := range msgs {
+		idx[m.ID] = i
+	}
+	rows, err := s.DB.Query(`SELECT message_id, emoji, COUNT(*), MAX(actor_id = ?), MIN(rowid)
+FROM tuon_reactions WHERE chat_id = ? GROUP BY message_id, emoji ORDER BY 5`, selfID, chatID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var mid string
+		var rc ReactionCount
+		var first int64
+		if err := rows.Scan(&mid, &rc.Emoji, &rc.Count, &rc.Mine, &first); err != nil {
+			return err
+		}
+		if i, ok := idx[mid]; ok {
+			msgs[i].Reactions = append(msgs[i].Reactions, rc)
+			if rc.Mine {
+				msgs[i].MyReaction = rc.Emoji
+			}
+		}
+	}
+	return rows.Err()
+}
+
+func (s *Store) Setting(k, def string) string {
+	var v string
+	if err := s.DB.QueryRow(`SELECT v FROM tuon_settings WHERE k = ?`, k).Scan(&v); err != nil {
+		return def
+	}
+	return v
+}
+
+func (s *Store) SetSetting(k, v string) error {
+	_, err := s.DB.Exec(`INSERT INTO tuon_settings (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v`, k, v)
+	return err
+}
+
+func b2i(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// Spaces lists your folders in order, then Inbox.
+func (s *Store) Spaces() []Space {
+	rows, err := s.DB.Query(`SELECT name FROM tuon_spaces ORDER BY pos, name`)
+	if err != nil {
+		return []Space{Inbox}
+	}
+	defer rows.Close()
+	var out []Space
+	for rows.Next() {
+		var n string
+		if rows.Scan(&n) == nil {
+			out = append(out, Space(n))
+		}
+	}
+	return append(out, Inbox)
+}
+
+// Label is how a space is shown.
+func Label(sp Space) string {
+	if sp == Inbox {
+		return "Inbox"
+	}
+	return string(sp)
+}
+
+func cleanName(name string) (string, error) {
+	name = strings.Join(strings.Fields(name), " ")
+	switch {
+	case name == "":
+		return "", fmt.Errorf("give the folder a name")
+	case strings.EqualFold(name, string(Inbox)):
+		return "", fmt.Errorf("Inbox is built in")
+	case len([]rune(name)) > 24:
+		return "", fmt.Errorf("keep folder names under 24 characters")
+	}
+	return name, nil
+}
+
+func (s *Store) AddSpace(name string) (Space, error) {
+	name, err := cleanName(name)
+	if err != nil {
+		return "", err
+	}
+	_, err = s.DB.Exec(`INSERT INTO tuon_spaces (name, pos) VALUES (?, (SELECT COALESCE(MAX(pos), -1) + 1 FROM tuon_spaces))`, name)
+	if err != nil {
+		return "", fmt.Errorf("there's already a folder called %q", name)
+	}
+	return Space(name), nil
+}
+
+// RenameSpace renames a folder; its chats move with it.
+func (s *Store) RenameSpace(old Space, name string) (Space, error) {
+	if old == Inbox {
+		return "", fmt.Errorf("Inbox can't be renamed")
+	}
+	name, err := cleanName(name)
+	if err != nil {
+		return "", err
+	}
+	if _, err := s.DB.Exec(`UPDATE tuon_spaces SET name = ? WHERE name = ?`, name, string(old)); err != nil {
+		return "", fmt.Errorf("there's already a folder called %q", name)
+	}
+	_, err = s.DB.Exec(`UPDATE tuon_chats SET space = ? WHERE space = ?`, name, string(old))
+	return Space(name), err
+}
+
+// DeleteSpace removes a folder; its chats go back to Inbox.
+func (s *Store) DeleteSpace(sp Space) error {
+	if sp == Inbox {
+		return fmt.Errorf("Inbox can't be deleted")
+	}
+	if _, err := s.DB.Exec(`UPDATE tuon_chats SET space = ? WHERE space = ?`, string(Inbox), string(sp)); err != nil {
+		return err
+	}
+	_, err := s.DB.Exec(`DELETE FROM tuon_spaces WHERE name = ?`, string(sp))
+	return err
+}
+
+// MoveSpace shifts a folder left (-1) or right (+1).
+func (s *Store) MoveSpace(sp Space, d int) error {
+	list := s.Spaces()
+	list = list[:len(list)-1] // not Inbox
+	i := -1
+	for j, x := range list {
+		if x == sp {
+			i = j
+		}
+	}
+	if i < 0 || i+d < 0 || i+d >= len(list) {
+		return nil
+	}
+	list[i], list[i+d] = list[i+d], list[i]
+	for pos, x := range list {
+		if _, err := s.DB.Exec(`UPDATE tuon_spaces SET pos = ? WHERE name = ?`, pos, string(x)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// SpaceCounts: how many chats are in each space.
+func (s *Store) SpaceCounts() map[Space]int {
+	out := map[Space]int{}
+	rows, err := s.DB.Query(`SELECT space, COUNT(*) FROM tuon_chats WHERE last_ts > 0 GROUP BY space`)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var sp string
+		var n int
+		if rows.Scan(&sp, &n) == nil {
+			out[Space(sp)] = n
+		}
+	}
+	return out
+}

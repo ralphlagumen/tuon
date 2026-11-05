@@ -1,0 +1,27 @@
+# Build output, local tools, previews
+bin/
+dist/
+
+# Secrets and personal data (never commit)
+cookies.txt
+cookies*.txt
+*.db
+*.db-wal
+*.db-shm
+*.log
+.env
+.env.*
+*.pem
+*.key
+
+# Claude Code / AI assistant files
+.claude/
+CLAUDE.md
+CLAUDE.local.md
+docs/plans/
+
+# OS and editor clutter
+.DS_Store
+.idea/
+.vscode/
+*.swp
