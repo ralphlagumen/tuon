@@ -1140,6 +1140,7 @@ func TestSafeFileName(t *testing.T) {
 func TestReceivedFileSaves(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir) // Windows
 	_ = os.MkdirAll(filepath.Join(dir, "Downloads"), 0o700)
 	var revealed string
 	revealFile = func(p string) error { revealed = p; return nil }

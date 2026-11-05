@@ -255,6 +255,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.status, m.statusErr = "syncing…", false
 			m.st.Self = m.conn.SelfID()
+			_ = m.st.SetSetting(store.SettingAccount, m.st.Self) // so a login as someone else can tell
 		}
 		m.reloadChats()
 		if msg.err != nil {

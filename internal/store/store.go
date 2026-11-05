@@ -555,6 +555,23 @@ func (s *Store) Prune(keep int) error {
 	return err
 }
 
+// SettingAccount: the Messenger user ID this data belongs to.
+const SettingAccount = "account"
+
+// Account is the user ID the local data belongs to: the saved setting, or
+// for data from before it was saved, the encrypted-chat device's owner.
+func (s *Store) Account() string {
+	if a := s.Setting(SettingAccount, ""); a != "" {
+		return a
+	}
+	var jid string
+	_ = s.DB.QueryRow(`SELECT jid FROM whatsmeow_device LIMIT 1`).Scan(&jid)
+	if i := strings.IndexAny(jid, ":@"); i > 0 {
+		return jid[:i]
+	}
+	return ""
+}
+
 func (s *Store) Setting(k, def string) string {
 	var v string
 	if err := s.DB.QueryRow(`SELECT v FROM tuon_settings WHERE k = ?`, k).Scan(&v); err != nil {

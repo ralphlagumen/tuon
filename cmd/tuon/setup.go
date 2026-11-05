@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -84,6 +85,11 @@ func login() error {
 	}
 	if err != nil {
 		return err
+	}
+	if ok, err := sameAccount(creds); err != nil {
+		return err
+	} else if !ok {
+		return errors.New("login cancelled: kept the other account's data")
 	}
 	if err := auth.Save(store.Dir(), creds); err != nil {
 		return err
@@ -167,6 +173,39 @@ func cookieLogin() (auth.Creds, error) {
 		return auth.Creds{}, fmt.Errorf("that line is missing %s. Run `tuon login` and try again", strings.Join(missing, ", "))
 	}
 	return c, nil
+}
+
+// sameAccount checks a new login against the account the local data
+// belongs to. A different account would see the old one's chats and run on
+// its encrypted-chat device, so its data is cleared first (with a yes).
+func sameAccount(creds auth.Creds) (bool, error) {
+	if _, err := os.Stat(filepath.Join(store.Dir(), "tuon.db")); err != nil {
+		return true, nil // nothing stored yet
+	}
+	st, err := store.Open()
+	if err != nil {
+		return false, err
+	}
+	old := st.Account()
+	st.Close()
+	if old == "" || old == creds.Cookies["c_user"] {
+		return true, nil
+	}
+	fmt.Println("\n  This is a different Messenger account from the one tuon has data for.")
+	fmt.Println("  To switch, tuon clears the other account's chats, folders and encryption keys")
+	fmt.Println("  on this computer (nothing on Messenger changes).")
+	fmt.Print("  Clear them and switch? [y/N] ")
+	if a := strings.ToLower(strings.TrimSpace(readLine())); a != "y" && a != "yes" {
+		return false, nil
+	}
+	for _, name := range []string{"tuon.db", "tuon.db-wal", "tuon.db-shm", "cache"} {
+		if err := os.RemoveAll(filepath.Join(store.Dir(), name)); err != nil {
+			return false, err
+		}
+	}
+	cleanTemp()
+	fmt.Println("  Cleared. Starting fresh for this account.")
+	return true, nil
 }
 
 // logout forgets the login; with wipe, all local data too.

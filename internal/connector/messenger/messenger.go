@@ -19,9 +19,11 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf16"
 
@@ -78,8 +80,12 @@ type Conn struct {
 	// after it failed to decrypt (see resetSession)
 	resetAt   map[string]time.Time
 	fetchOnce sync.Once
-	ctx       context.Context
-	cancel    context.CancelFunc
+	// threadsSeen counts distinct chats received (known holds their keys),
+	// so paging can tell when a page brought nothing new
+	threadsSeen atomic.Int64
+	known       map[int64]bool
+	ctx         context.Context
+	cancel      context.CancelFunc
 }
 
 var _ connector.Connector = (*Conn)(nil)
@@ -193,23 +199,82 @@ func (c *Conn) onMeta(ctx context.Context, raw any) {
 	}
 }
 
+// fetchMoreThreads loads the chat list past the first page, for plain
+// chats (sync group 1) and encrypted ones (95). Messenger only acknowledges
+// each request; the chats arrive a moment later over the connection. So
+// after each page we wait, and stop a group once a page brings nothing new.
 func (c *Conn) fetchMoreThreads() {
-	var prevMin int64
-	for i := 0; i < maxThreadPages; i++ {
-		ks, tbl, err := c.cli.FetchMoreThreads(c.ctx, 1)
-		if err != nil {
-			c.log.Warn().Err(err).Msg("fetch more threads")
-			return
+	for _, group := range []int64{1, 95} {
+		pages, got := 0, 0
+		why := "page limit"
+		for i := 0; i < maxThreadPages; i++ {
+			before := c.threadsSeen.Load()
+			ks, tbl, err := c.cli.FetchMoreThreads(c.ctx, group)
+			if err != nil {
+				why = "error: " + err.Error()
+				break
+			}
+			if tbl == nil || ks == nil || !ks.HasMoreBefore {
+				why = "no more"
+				break
+			}
+			pages++
+			c.handleTable(tbl)
+			select { // the chats come over the connection
+			case <-c.ctx.Done():
+				return
+			case <-time.After(3 * time.Second):
+			}
+			n := int(c.threadsSeen.Load() - before)
+			got += n
+			if n == 0 {
+				why = "a page brought nothing new"
+				break
+			}
 		}
-		if tbl == nil || len(tbl.LSDeleteThenInsertThread)+len(tbl.LSUpdateOrInsertThread) == 0 {
-			return // no more chats: stop asking
-		}
-		c.handleTable(tbl)
-		if ks == nil || !ks.HasMoreBefore || ks.MinThreadKey == prevMin {
-			return
-		}
-		prevMin = ks.MinThreadKey
+		// counts only: how far the chat list got, and why it stopped
+		c.log.Warn().Int64("group", group).Int("pages", pages).Int("chats", got).Str("stop", why).Msg("chat list paging")
 	}
+}
+
+// countThreads notes chats we hadn't seen this run.
+func (c *Conn) countThreads(tbl *table.LSTable) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.known == nil {
+		c.known = map[int64]bool{}
+	}
+	add := func(k int64) {
+		if !c.known[k] {
+			c.known[k] = true
+			c.threadsSeen.Add(1)
+		}
+	}
+	for _, t := range tbl.LSDeleteThenInsertThread {
+		add(t.ThreadKey)
+	}
+	for _, t := range tbl.LSUpdateOrInsertThread {
+		add(t.ThreadKey)
+	}
+}
+
+func keyMin(ks *socket.KeyStoreData) int64 {
+	if ks == nil {
+		return 0
+	}
+	return ks.MinThreadKey
+}
+
+// tableNames lists the non-empty record lists in a table (for diagnostics).
+func tableNames(tbl *table.LSTable) []string {
+	var out []string
+	v := reflect.ValueOf(tbl).Elem()
+	for i := 0; i < v.NumField(); i++ {
+		if f := v.Field(i); f.Kind() == reflect.Slice && f.Len() > 0 {
+			out = append(out, fmt.Sprintf("%s:%d", v.Type().Field(i).Name, f.Len()))
+		}
+	}
+	return out
 }
 
 // ---- plain (lightspeed) chats ----
@@ -237,6 +302,7 @@ func (c *Conn) handleTable(tbl *table.LSTable) {
 			c.emit(connector.ChatAliasEvent{From: id(h.ThreadKey), To: id(h.ThreadJID)})
 		}
 	}
+	c.countThreads(tbl)
 	for _, t := range tbl.LSDeleteThenInsertThread {
 		c.mu.Lock()
 		c.threadType[t.ThreadKey] = t.ThreadType
