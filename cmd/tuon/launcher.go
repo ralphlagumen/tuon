@@ -8,6 +8,8 @@ import (
 	"os/signal"
 
 	"github.com/ralph/tuon/internal/sandbox"
+	"github.com/ralph/tuon/internal/store"
+	"github.com/ralph/tuon/internal/vault"
 )
 
 // Exit codes the sandboxed chat app uses to hand work back to the launcher.
@@ -24,8 +26,27 @@ func launchSandboxed(args []string) (code int, ok bool) {
 		sandboxNote = why
 		return 0, false
 	}
+	// unlock once here; the chat app gets the key over a pipe
+	if vault.Exists(store.Dir()) {
+		if _, err := openVault(); err != nil {
+			fmt.Fprintln(os.Stderr, "tuon:", err)
+			return 1, true
+		}
+	}
 	for {
 		cmd, _ := sandbox.Command(args)
+		if vlt != nil {
+			r, w, err := os.Pipe()
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "tuon:", err)
+				return 1, true
+			}
+			_, _ = w.Write(vlt.Handoff())
+			w.Close()
+			cmd.ExtraFiles = []*os.File{r} // fd 3 in the child
+			cmd.Env = append(cmd.Env, keyFDEnv+"=3")
+			defer r.Close()
+		}
 		// ctrl+c belongs to the chat app while it runs
 		signal.Ignore(os.Interrupt)
 		err := cmd.Run()
@@ -53,6 +74,5 @@ func launchSandboxed(args []string) (code int, ok bool) {
 		default:
 			return code, true
 		}
-		vlt = nil // the chat app unlocks for itself
 	}
 }

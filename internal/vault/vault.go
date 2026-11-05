@@ -185,6 +185,25 @@ func (v *Vault) CheckPassphrase(pass string) bool {
 	return err == nil
 }
 
+// Handoff gives the data key, to pass to tuon's own sandboxed child over a
+// private pipe (so you unlock once, not once per process). Never write it
+// anywhere else.
+func (v *Vault) Handoff() []byte { return append([]byte(nil), v.key[:]...) }
+
+// Adopt opens the vault with a key handed over by the launcher.
+func Adopt(dir string, key []byte) (*Vault, error) {
+	f, err := readFile(dir)
+	if err != nil {
+		return nil, err
+	}
+	if len(key) != chacha20poly1305.KeySize {
+		return nil, errors.New("handed-over key has the wrong size")
+	}
+	v := &Vault{kind: f.Kind, file: f, dir: dir}
+	copy(v.key[:], key)
+	return v, nil
+}
+
 // DeriveKey gives a separate 32-byte key for one purpose (e.g. keys.db),
 // so the data key itself is never handed out.
 func (v *Vault) DeriveKey(purpose string) []byte {

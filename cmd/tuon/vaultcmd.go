@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -28,6 +29,10 @@ func openVault() (*vault.Vault, error) {
 		return vlt, nil
 	}
 	dir := store.Dir()
+	if v, ok := handedOver(dir); ok { // the launcher already unlocked
+		vlt = v
+		return vlt, nil
+	}
 	var err error
 	switch {
 	case vault.Exists(dir) && vault.Kind(dir) == vault.KindEnclave:
@@ -119,6 +124,26 @@ func unlockPassphrase(dir string) (*vault.Vault, error) {
 		}
 	}
 	return nil, errors.New("too many wrong passphrases")
+}
+
+// keyFDEnv names the pipe the launcher passes the data key on.
+const keyFDEnv = "TUON_KEY_FD"
+
+// handedOver reads the key the launcher passed, once, then forgets the pipe.
+func handedOver(dir string) (*vault.Vault, bool) {
+	if os.Getenv(keyFDEnv) != "3" || !vault.Exists(dir) {
+		return nil, false
+	}
+	os.Unsetenv(keyFDEnv)
+	f := os.NewFile(3, "tuon-key")
+	defer f.Close()
+	key := make([]byte, 33)
+	n, _ := io.ReadFull(f, key)
+	if n != 32 {
+		return nil, false
+	}
+	v, err := vault.Adopt(dir, key[:32])
+	return v, err == nil
 }
 
 // loggedIn checks for a saved session (unlocking the vault if needed).

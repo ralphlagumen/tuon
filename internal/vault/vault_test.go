@@ -96,3 +96,25 @@ func TestTamperedDataFails(t *testing.T) {
 		t.Fatal("tampered data opened")
 	}
 }
+
+func TestHandoffAdopt(t *testing.T) {
+	dir := t.TempDir()
+	v, err := CreatePassphrase(dir, "correct horse battery")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := v.SealString("hello")
+	child, err := Adopt(dir, v.Handoff())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := child.OpenString(s); got != "hello" || child.Kind() != KindPassphrase {
+		t.Fatalf("adopted vault can't read: %q", got)
+	}
+	if string(child.DeriveKey("keys.db/2")) != string(v.DeriveKey("keys.db/2")) {
+		t.Fatal("derived keys differ")
+	}
+	if _, err := Adopt(dir, []byte("short")); err == nil {
+		t.Fatal("bad key size accepted")
+	}
+}
