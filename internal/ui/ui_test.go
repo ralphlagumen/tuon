@@ -1481,3 +1481,28 @@ func TestKeysTroubleWarning(t *testing.T) {
 		t.Fatalf("no warning:\n%s", s)
 	}
 }
+
+func TestPreviewsOff(t *testing.T) {
+	m, _, _ := newTestModel(t, 140, 30)
+	m = seed(m)
+	m = key(m, "3")
+	if !strings.Contains(screen(m), "deploy done") {
+		t.Fatalf("setup: snippet not shown\n%s", screen(m))
+	}
+	next, _ := m.runCommand("previews off")
+	m = next.(Model)
+	m.reloadChats()
+	m.chat = nil
+	_ = m.preview()
+	s := screen(m)
+	if strings.Contains(s, "deploy done") || strings.Contains(s, "pushed the fix") || !strings.Contains(s, "Previews are off") {
+		t.Fatalf("message text visible with previews off:\n%s", s)
+	}
+	if !strings.Contains(s, "new message") {
+		t.Fatalf("unread chats should still say so:\n%s", s)
+	}
+	m = run(m, m.openChat(m.chats[m.cursor])) // opening shows the chat
+	if !strings.Contains(screen(m), "pushed the fix") {
+		t.Fatalf("opened chat hides messages:\n%s", screen(m))
+	}
+}

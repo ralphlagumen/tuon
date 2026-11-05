@@ -356,7 +356,14 @@ func (m Model) chatRow(c store.ChatRow, selected bool, lw int) []string {
 	if c.Unread {
 		nameS = sBold.Render(fit(name, nameW))
 	}
-	snip := sMuted.Render(fit(termSafe(c.Snippet), lw-4))
+	snippet := c.Snippet
+	if !m.previewsOn { // shoulder-surfing: no message text in the list
+		snippet = ""
+		if c.Unread {
+			snippet = "new message"
+		}
+	}
+	snip := sMuted.Render(fit(termSafe(snippet), lw-4))
 	if c.Muted {
 		nameS = sMuted.Render(fit(name, nameW))
 	}
@@ -400,6 +407,14 @@ func (m Model) chatBody(rw, bh int) []string {
 		return make([]string, bh)
 	}
 	out := make([]string, 0, bh)
+	if m.chat != nil && !m.previewsOn && m.focus == focusList { // previews off: nothing until opened
+		for i := 0; i < bh; i++ {
+			out = append(out, "")
+		}
+		hint := "Previews are off. Press enter to open " + termSafe(m.chat.Display) + "."
+		out[bh/2] = strings.Repeat(" ", max(0, (rw-ansi.StringWidth(hint))/2)) + sMuted.Render(hint)
+		return out
+	}
 	if m.chat == nil {
 		for i := 0; i < bh; i++ {
 			out = append(out, "")
@@ -935,6 +950,7 @@ func (m Model) helpView() []string {
 		cmd(":sound", "new-message sound and volume"),
 		cmd(":lock", "lock tuon now"),
 		cmd(":images on|off", "photos inside the chat"),
+		cmd(":previews on|off", "message text in the chat list"),
 		cmd(":quit", "quit"),
 		"",
 		head("new chats land in Inbox. Move them once with t; they stay put."),

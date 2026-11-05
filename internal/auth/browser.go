@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,15 +12,13 @@ import (
 	"runtime"
 	"strings"
 	"time"
-
-	"github.com/coder/websocket"
 )
 
 // Browser login: open facebook.com's login in its own Chrome-type window (a fresh,
 // throwaway profile, so your normal browser isn't touched), let you log in
 // there like on the website, and pick up the session once you're in.
-// Tuon talks to that window over Chrome's local debugging port, which
-// listens only on this computer and closes with the window.
+// Tuon talks to that window over a private pipe (no network port), which
+// closes with the window.
 
 // Facebook's login page: the same account as Messenger, and steadier than
 // messenger.com's own web login (which often fails with "Your request
@@ -65,18 +64,13 @@ func BrowserLogin(ctx context.Context, browser string) (Creds, error) {
 	if err != nil {
 		return Creds{}, err
 	}
-
-	cmd := exec.Command(browser,
-		"--user-data-dir="+profile,
-		"--remote-debugging-port=0", // any free port, local only
-		"--remote-debugging-address=127.0.0.1",
-		"--no-first-run", "--no-default-browser-check", "--disable-sync",
+	cmd, dt, err := startBrowser(browser, profile,
 		"--window-size=760,860",
 		// a normal window with the address bar, so you can see you're on
 		// https://www.facebook.com before typing anything
-		"--new-window", loginURL,
-	)
-	if err := cmd.Start(); err != nil {
+		"--new-window", loginURL)
+	if err != nil {
+		_ = os.RemoveAll(profile)
 		return Creds{}, fmt.Errorf("couldn't open the login window: %w", err)
 	}
 	exited := make(chan struct{})
@@ -84,6 +78,7 @@ func BrowserLogin(ctx context.Context, browser string) (Creds, error) {
 	defer func() {
 		// close the window, wait for it to let go of its files, then delete
 		// the throwaway profile (and its cookies)
+		dt.close()
 		if cmd.Process != nil {
 			_ = cmd.Process.Kill()
 		}
@@ -94,15 +89,9 @@ func BrowserLogin(ctx context.Context, browser string) (Creds, error) {
 		_ = os.RemoveAll(profile)
 	}()
 
-	ws, err := devtools(ctx, profile, exited)
-	if err != nil {
-		return Creds{}, err
-	}
-	defer ws.CloseNow()
-
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
-	for id := 1; ; id++ {
+	for id := 1; ; id += 3 {
 		select {
 		case <-ctx.Done():
 			return Creds{}, errors.New("login timed out")
@@ -110,63 +99,98 @@ func BrowserLogin(ctx context.Context, browser string) (Creds, error) {
 			return Creds{}, errors.New("the login window was closed before you logged in")
 		case <-tick.C:
 		}
-		cookies, err := allCookies(ctx, ws, id)
+		cookies, err := dt.cookies(ctx, id)
 		if err != nil {
 			continue // the window may be busy loading; try again
 		}
 		if c := (Creds{Platform: "facebook", Cookies: cookies}); c.Valid() {
 			// give Messenger a moment to set its remaining cookies
 			time.Sleep(1500 * time.Millisecond)
-			if more, err := allCookies(ctx, ws, id+1); err == nil && (Creds{Cookies: more}).Valid() {
+			if more, err := dt.cookies(ctx, id+1); err == nil && (Creds{Cookies: more}).Valid() {
 				c.Cookies = more
 			}
-			_ = send(ctx, ws, id+2, "Browser.close")
+			_ = dt.send(id+2, "Browser.close")
 			return c, nil
 		}
 	}
 }
 
-// devtools connects to the window's local debugging port.
-func devtools(ctx context.Context, profile string, exited <-chan struct{}) (*websocket.Conn, error) {
-	deadline := time.Now().Add(20 * time.Second)
-	for time.Now().Before(deadline) {
-		select {
-		case <-exited:
-			return nil, errors.New("the login window closed right away")
-		default:
-		}
-		b, err := os.ReadFile(filepath.Join(profile, "DevToolsActivePort"))
-		if lines := strings.Split(strings.TrimSpace(string(b)), "\n"); err == nil && len(lines) == 2 {
-			url := "ws://127.0.0.1:" + strings.TrimSpace(lines[0]) + strings.TrimSpace(lines[1])
-			dctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			ws, _, err := websocket.Dial(dctx, url, nil)
-			cancel()
-			if err == nil {
-				ws.SetReadLimit(8 << 20)
-				return ws, nil
-			}
-		}
-		time.Sleep(200 * time.Millisecond)
+// startBrowser starts a Chrome-type browser on a throwaway profile, talking
+// DevTools over a private pipe (--remote-debugging-pipe): there is no
+// network port, so no other program on this computer can connect to the
+// window and read its cookies.
+func startBrowser(browser, profile string, extra ...string) (*exec.Cmd, *devPipe, error) {
+	toChrome, ourEnd, err := os.Pipe() // Chrome reads commands on its fd 3
+	if err != nil {
+		return nil, nil, err
 	}
-	return nil, errors.New("couldn't talk to the login window")
+	fromChrome, chromeEnd, err := os.Pipe() // and writes replies on fd 4
+	if err != nil {
+		return nil, nil, err
+	}
+	args := append([]string{
+		"--user-data-dir=" + profile,
+		"--remote-debugging-pipe",
+		"--no-first-run", "--no-default-browser-check", "--disable-sync",
+	}, extra...)
+	cmd := exec.Command(browser, args...)
+	cmd.ExtraFiles = []*os.File{toChrome, chromeEnd}
+	if err := cmd.Start(); err != nil {
+		return nil, nil, err
+	}
+	toChrome.Close() // Chrome's copies stay open in Chrome
+	chromeEnd.Close()
+	dt := &devPipe{w: ourEnd, msgs: make(chan []byte, 16)}
+	go dt.readLoop(fromChrome)
+	return cmd, dt, nil
 }
 
-func send(ctx context.Context, ws *websocket.Conn, id int, method string) error {
+// devPipe speaks the DevTools protocol over the pipe: JSON messages, each
+// ended by a NUL byte.
+type devPipe struct {
+	w    *os.File
+	msgs chan []byte
+}
+
+func (d *devPipe) readLoop(r *os.File) {
+	defer close(d.msgs)
+	defer r.Close()
+	br := bufio.NewReaderSize(r, 1<<20)
+	for {
+		msg, err := br.ReadBytes(0)
+		if err != nil {
+			return
+		}
+		d.msgs <- msg[:len(msg)-1]
+	}
+}
+
+func (d *devPipe) close() { _ = d.w.Close() }
+
+func (d *devPipe) send(id int, method string) error {
 	b, _ := json.Marshal(map[string]any{"id": id, "method": method})
-	return ws.Write(ctx, websocket.MessageText, b)
+	_, err := d.w.Write(append(b, 0))
+	return err
 }
 
-// allCookies asks the window for its facebook.com cookies.
-func allCookies(ctx context.Context, ws *websocket.Conn, id int) (map[string]string, error) {
-	if err := send(ctx, ws, id, "Storage.getCookies"); err != nil {
+// cookies asks the window for its facebook.com cookies.
+func (d *devPipe) cookies(ctx context.Context, id int) (map[string]string, error) {
+	if err := d.send(id, "Storage.getCookies"); err != nil {
 		return nil, err
 	}
-	rctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
+	timeout := time.After(5 * time.Second)
 	for {
-		_, b, err := ws.Read(rctx)
-		if err != nil {
-			return nil, err
+		var b []byte
+		var ok bool
+		select {
+		case b, ok = <-d.msgs:
+			if !ok {
+				return nil, errors.New("the login window closed")
+			}
+		case <-timeout:
+			return nil, errors.New("the login window didn't answer")
+		case <-ctx.Done():
+			return nil, ctx.Err()
 		}
 		var resp struct {
 			ID     int `json:"id"`

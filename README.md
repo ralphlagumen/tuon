@@ -123,7 +123,7 @@ With a message selected:
 
 Attached files appear in your text as `[Image #1]` or `[File #2]`. Delete the token to drop the file. Your message shows right away as "sending…", and as "not sent" if Messenger hasn't confirmed it after 45 seconds. If sending fails, your text (and any files not sent) go back in the box.
 
-Type `:` in the chat list for commands: `:mute`, `:sound` (pick the new-message sound and volume), `:images off`, `:quit`.
+Type `:` in the chat list for commands: `:mute`, `:sound` (pick the new-message sound and volume), `:images off`, `:previews off` (no message text in the chat list, for when someone can see your screen), `:lock`, `:quit`.
 
 ## Performance
 

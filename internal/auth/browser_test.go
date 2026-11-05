@@ -3,7 +3,6 @@ package auth
 import (
 	"context"
 	"os"
-	"os/exec"
 	"testing"
 	"time"
 )
@@ -21,15 +20,14 @@ func TestBrowserWindowMechanics(t *testing.T) {
 		t.Skip("no Chrome-type browser")
 	}
 	profile, _ := os.MkdirTemp("", "tuon-test-")
-	cmd := exec.Command(browser, "--headless=new", "--user-data-dir="+profile,
-		"--remote-debugging-port=0", "--remote-debugging-address=127.0.0.1",
-		"--no-first-run", loginURL)
-	if err := cmd.Start(); err != nil {
+	cmd, dt, err := startBrowser(browser, profile, "--headless=new", loginURL)
+	if err != nil {
 		t.Fatal(err)
 	}
 	exited := make(chan struct{})
 	go func() { _ = cmd.Wait(); close(exited) }()
 	defer func() {
+		dt.close()
 		_ = cmd.Process.Kill()
 		<-exited
 		_ = os.RemoveAll(profile)
@@ -37,15 +35,10 @@ func TestBrowserWindowMechanics(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 	defer cancel()
-	ws, err := devtools(ctx, profile, exited)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ws.CloseNow()
 	var names []string
 	for i := 1; i <= 20 && len(names) == 0; i++ {
 		time.Sleep(time.Second)
-		c, err := allCookies(ctx, ws, i)
+		c, err := dt.cookies(ctx, i)
 		if err != nil {
 			t.Fatal(err)
 		}

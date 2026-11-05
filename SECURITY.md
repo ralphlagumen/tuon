@@ -8,7 +8,7 @@ Tuon logs in to Messenger as you, keeps your encryption keys, and shows text and
   - With the browser login, you type it into Facebook's own login page, in a normal browser window where you can check the address.
   - With the password login, it goes straight to Meta and is then dropped.
 - **Only the session is kept, encrypted.** It's the cookies Meta gives back after you log in, stored in `login.enc` under tuon's own key (see below). Other apps can't read it: it is no longer kept in the keychain, where any program running as you could read it without a prompt.
-- **The browser login uses a throwaway profile.** It never reads your normal browser's cookies, and the temporary profile is deleted afterwards. Tuon talks to that window through Chrome's debugging port, which listens only on your computer and closes with the window.
+- **The browser login uses a throwaway profile.** It never reads your normal browser's cookies, and the temporary profile is deleted afterwards. Tuon talks to that window over a private pipe, not a network port, so no other program on your computer can connect to it and read its cookies.
 - **Your Messenger PIN is never stored.** `tuon history` uses it once to join Messenger's encrypted backup. The backup keys it gets back are stored encrypted.
 - **You can remove it.** `tuon logout` deletes the session. `tuon logout --wipe` also deletes all local data.
 

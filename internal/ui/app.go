@@ -47,11 +47,12 @@ const (
 )
 
 const (
-	pageSize     = 200 // messages kept on screen per chat
-	thumbMaxCols = 64  // widest inline photo, in cells (1 cell = 1 px wide)
-	settingImage = "images"
-	settingSound = "sound"
-	maxSugg      = 5
+	pageSize        = 200 // messages kept on screen per chat
+	thumbMaxCols    = 64  // widest inline photo, in cells (1 cell = 1 px wide)
+	settingImage    = "images"
+	settingPreviews = "previews"
+	settingSound    = "sound"
+	maxSugg         = 5
 )
 
 // Quick reactions, same set as Messenger.
@@ -129,6 +130,7 @@ type Model struct {
 
 	// images
 	imagesOn   bool
+	previewsOn bool // message text in the chat list and when browsing
 	raw        map[string][]byte
 	imgs       map[string]image.Image
 	pending    map[string]bool
@@ -202,27 +204,28 @@ func New(ctx context.Context, st *store.Store, conn connector.Connector, platfor
 	in.Prompt = ""
 	in.CharLimit = 4000
 	m := Model{
-		ctx:       ctx,
-		st:        st,
-		conn:      conn,
-		platform:  platform,
-		space:     firstFolder(st),
-		imagesOn:  st.Setting(settingImage, "on") == "on",
-		soundOn:   st.Setting(settingSound, "on") == "on",
-		soundName: st.Setting("sound_name", defaultSound),
-		soundVol:  atoiOr(st.Setting("sound_volume", "100"), 100),
-		started:   time.Now(),
-		raw:       map[string][]byte{},
-		imgs:      map[string]image.Image{},
-		pending:   map[string]bool{},
-		failed:    map[string]string{},
-		input:     in,
-		compose:   newBox(),
-		draftAtts: map[string][]pendingFile{},
-		drafts:    st.Drafts(), // text left unsent last time
-		dragFrom:  -1,
-		dragTo:    -1,
-		status:    "connecting…",
+		ctx:        ctx,
+		st:         st,
+		conn:       conn,
+		platform:   platform,
+		space:      firstFolder(st),
+		imagesOn:   st.Setting(settingImage, "on") == "on",
+		previewsOn: st.Setting(settingPreviews, "on") == "on",
+		soundOn:    st.Setting(settingSound, "on") == "on",
+		soundName:  st.Setting("sound_name", defaultSound),
+		soundVol:   atoiOr(st.Setting("sound_volume", "100"), 100),
+		started:    time.Now(),
+		raw:        map[string][]byte{},
+		imgs:       map[string]image.Image{},
+		pending:    map[string]bool{},
+		failed:     map[string]string{},
+		input:      in,
+		compose:    newBox(),
+		draftAtts:  map[string][]pendingFile{},
+		drafts:     st.Drafts(), // text left unsent last time
+		dragFrom:   -1,
+		dragTo:     -1,
+		status:     "connecting…",
 	}
 	if kittyMode {
 		m.kitty = newKittyImages(os.Stdout, filepath.Join(store.Dir(), "cache", "img"))
@@ -1255,6 +1258,20 @@ func (m Model) runCommand(cmd string) (tea.Model, tea.Cmd) {
 			note = "Photos on"
 		}
 		return m, tea.Batch(m.reloadMessages(), m.flash(note))
+	case "previews off", "previews on", "previews":
+		switch {
+		case strings.HasSuffix(cmd, " on"):
+			m.previewsOn = true
+		case strings.HasSuffix(cmd, " off"):
+			m.previewsOn = false
+		default:
+			m.previewsOn = !m.previewsOn
+		}
+		_ = m.st.SetSetting(settingPreviews, map[bool]string{true: "on", false: "off"}[m.previewsOn])
+		if m.previewsOn {
+			return m, m.flash("Previews on")
+		}
+		return m, m.flash("Previews off: no message text until you open a chat")
 	case "help":
 		m.mode = modeHelp
 	case "lock":
@@ -1306,6 +1323,9 @@ func (m *Model) preview() tea.Cmd {
 	}
 	m.chat = &c
 	m.selID, m.scroll, m.selecting, m.reacting = "", 0, false, false
+	if !m.previewsOn { // don't even load them while browsing
+		return nil
+	}
 	return tea.Batch(m.reloadMessages(), m.loadNewest())
 }
 
