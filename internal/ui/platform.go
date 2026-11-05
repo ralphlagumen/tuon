@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"os/exec"
@@ -167,6 +168,30 @@ func openWebLink(raw string) error {
 		return err
 	}
 	return openFile(raw)
+}
+
+// linkRisk says where a link really goes, and why it might be a trick
+// ("" when it looks ordinary). The card title is the sender's to choose;
+// this is not.
+func linkRisk(raw string) (host, risk string) {
+	u, err := safeWebURL(raw)
+	if err != nil {
+		return "", "isn't a web link"
+	}
+	host = strings.ToLower(u.Hostname())
+	switch {
+	case u.User != nil:
+		return host, "hides its real address behind a name@ part"
+	case net.ParseIP(host) != nil:
+		return host, "is a bare IP address, not a site name"
+	case strings.Contains(host, "xn--"):
+		return host, "uses look-alike letters (punycode)"
+	case u.Scheme == "http":
+		return host, "isn't encrypted (http)"
+	case u.Port() != "" && u.Port() != "443":
+		return host, "uses an unusual port " + u.Port()
+	}
+	return host, ""
 }
 
 func safeWebURL(raw string) (*url.URL, error) {

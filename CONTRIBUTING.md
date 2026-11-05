@@ -105,3 +105,7 @@ Never commit, paste or log:
 ## Questions
 
 Open an issue, or start a draft pull request early and ask there. Showing a rough version is better than guessing.
+
+## Before you push
+
+Run `./scripts/check.sh`: module checksums, build, vet, tests and known vulnerabilities. There's no hosted CI, so this is the check.

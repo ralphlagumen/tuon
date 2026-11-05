@@ -772,7 +772,7 @@ func TestSharedLinkCard(t *testing.T) {
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = run(next.(Model), cmd)
 	s := screen(m)
-	if !strings.Contains(s, "▸ YOUR FAVORITE TOYS ARE ON SALE!") || !strings.Contains(s, "Facebook · click to open") {
+	if !strings.Contains(s, "▸ YOUR FAVORITE TOYS ARE ON SALE!") || !strings.Contains(s, "www.facebook.com · click to open") {
 		t.Fatalf("link card missing:\n%s", s)
 	}
 	y := -1
@@ -1351,5 +1351,66 @@ func TestExpiredPhotoLinkRenews(t *testing.T) {
 	}
 	if len(opened) != 1 {
 		t.Fatalf("photo not opened after renewing the link (opened %v)", opened)
+	}
+}
+
+func TestLinkRisk(t *testing.T) {
+	for url, want := range map[string]string{
+		"https://www.reddit.com/r/x":         "",
+		"http://example.com":                 "isn't encrypted (http)",
+		"https://192.168.1.5/login":          "is a bare IP address, not a site name",
+		"https://xn--fcebook-8va.com/":       "uses look-alike letters (punycode)",
+		"https://facebook.com@evil.example/": "hides its real address behind a name@ part",
+		"https://example.com:8443/":          "uses an unusual port 8443",
+		"javascript:alert(1)":                "isn't a web link",
+	} {
+		if _, got := linkRisk(url); got != want {
+			t.Errorf("linkRisk(%q) = %q, want %q", url, got, want)
+		}
+	}
+	if host, _ := linkRisk("https://facebook.com@evil.example/"); host != "evil.example" {
+		t.Errorf("host = %q, want the real one", host)
+	}
+}
+
+func TestRiskyLinkNeedsSecondPress(t *testing.T) {
+	var opened string
+	openURL = func(u string) error { opened = u; return nil }
+	defer func() { openURL = openFile }()
+	m, _, _ := newTestModel(t, 100, 26)
+	cmd := m.openLinkSafe("http://example.com")
+	if cmd == nil || opened != "" || !strings.Contains(m.toast, "isn't encrypted") {
+		t.Fatalf("first press: opened=%q toast=%q", opened, m.toast)
+	}
+	m = run(m, m.openLinkSafe("http://example.com"))
+	if opened != "http://example.com" {
+		t.Fatal("second press should open it")
+	}
+	opened = ""
+	m = run(m, m.openLinkSafe("https://www.reddit.com/r/x"))
+	if opened == "" {
+		t.Fatal("an ordinary https link opens on the first press")
+	}
+}
+
+func TestClipboardClearsOnlyOurText(t *testing.T) {
+	clip := ""
+	readClipboard = func() string { return clip }
+	writeClipboard = func(s string) error { clip = s; return nil }
+	old := clipboardKeep
+	clipboardKeep = 10 * time.Millisecond
+	defer func() { readClipboard, writeClipboard, clipboardKeep = clipboardText, copyToClipboard, old }()
+
+	m, _, _ := newTestModel(t, 100, 26)
+	m = run(m, copyText("the PIN is 4821", 1))
+	if clip != "" {
+		t.Fatalf("clipboard should be cleared, still %q", clip)
+	}
+	// something else copied since: left alone
+	next, cmd := m.Update(copiedMsg{n: 1, text: "old"})
+	clip = "my own thing"
+	_ = run(next.(Model), cmd)
+	if clip != "my own thing" {
+		t.Fatalf("wiped someone else's clipboard: %q", clip)
 	}
 }

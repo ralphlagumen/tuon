@@ -99,6 +99,7 @@ type Model struct {
 	refilling    map[string]bool // chats waiting to refill a message that couldn't be decrypted
 	askedName    map[string]bool // senders whose name we already asked Messenger for
 	checkAt      time.Time       // a redraw is due then, to flip "sending…" to "not sent"
+	warning      string          // a lasting safety warning shown in the header
 	reacting     bool            // reaction picker open
 	selecting    bool            // stepping through messages (react, photo); else typing
 
@@ -120,17 +121,18 @@ type Model struct {
 	suggOff   bool // esc closed suggestions for this draft position
 
 	// images
-	imagesOn  bool
-	raw       map[string][]byte
-	imgs      map[string]image.Image
-	pending   map[string]bool
-	failed    map[string]string // ref -> error, so we don't retry forever
-	relinked  map[string]bool   // expired photo links we already asked Messenger to renew
-	imgIdx    int               // in image view: index into chatImages()
-	recent    []string          // photo refs, oldest first (for letting old ones go)
-	kitty     *kittyImages      // real photos (Ghostty/kitty); nil = View photo buttons
-	albumWait []connector.Media // photos to open in the viewer once all have loaded
-	gallery   []connector.Media // photos the full-screen view flips through
+	imagesOn   bool
+	raw        map[string][]byte
+	imgs       map[string]image.Image
+	pending    map[string]bool
+	failed     map[string]string // ref -> error, so we don't retry forever
+	relinked   map[string]bool   // expired photo links we already asked Messenger to renew
+	confirmURL string            // a risky link waiting for a second press to open
+	imgIdx     int               // in image view: index into chatImages()
+	recent     []string          // photo refs, oldest first (for letting old ones go)
+	kitty      *kittyImages      // real photos (Ghostty/kitty); nil = View photo buttons
+	albumWait  []connector.Media // photos to open in the viewer once all have loaded
+	gallery    []connector.Media // photos the full-screen view flips through
 
 	status    string
 	statusErr bool
@@ -224,6 +226,13 @@ func New(ctx context.Context, st *store.Store, conn connector.Connector, platfor
 
 // LoggedOut reports that tuon quit because Messenger logged you out.
 func (m Model) LoggedOut() bool { return m.loggedOut }
+
+// Warn shows a lasting warning in the status line (e.g. disk not encrypted).
+func (m *Model) Warn(text string) {
+	if text != "" {
+		m.warning = text
+	}
+}
 
 // Cleanup frees photos held by the terminal. Call after the program ends.
 func (m Model) Cleanup() {
@@ -433,10 +442,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			return m, m.flash("couldn't copy: " + msg.err.Error())
 		}
+		clear := tea.Tick(clipboardKeep, func(time.Time) tea.Msg { return clipClear{msg.text} })
 		if msg.n == 1 {
-			return m, m.flash("Copied")
+			return m, tea.Batch(clear, m.flash("Copied (clears in a minute)"))
 		}
-		return m, m.flash(fmt.Sprintf("Copied %d messages", msg.n))
+		return m, tea.Batch(clear, m.flash(fmt.Sprintf("Copied %d messages (clears in a minute)", msg.n)))
+
+	case clipClear:
+		text := msg.text
+		return m, func() tea.Msg {
+			// only if it's still ours: never wipe something copied since
+			if text != "" && readClipboard() == strings.TrimRight(text, "\r\n") {
+				_ = writeClipboard("")
+			}
+			return nil
+		}
 
 	case clearToast:
 		m.toast = ""
@@ -1651,7 +1671,7 @@ func (m Model) onSelectKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if sel >= 0 && sel < len(m.msgs) && !hasPhoto(m.msgs[sel]) {
 			for _, md := range m.msgs[sel].Media {
 				if md.Kind == connector.Link && md.URL != "" {
-					return m, openLink(md.URL)
+					return m, m.openLinkSafe(md.URL)
 				}
 			}
 			return m, m.flash("Nothing to open in this message (ctrl+o opens the newest photo)")
@@ -1711,7 +1731,7 @@ func (m Model) onMouse(e tea.MouseMsg) (tea.Model, tea.Cmd) {
 			}
 			for _, md := range m.msgs[from].Media {
 				if md.Kind == connector.Link && md.URL != "" {
-					return m, openLink(md.URL)
+					return m, m.openLinkSafe(md.URL)
 				}
 			}
 			m.focus, m.selecting = focusChat, true
@@ -2194,6 +2214,7 @@ func (m *Model) saveFile(md connector.Media) tea.Cmd {
 		if err := os.WriteFile(path, b, 0o600); err != nil {
 			return toastMsg{"couldn't save the file: " + err.Error()}
 		}
+		_ = markDownloaded(path) // the OS warns before running it, like a browser download
 		_ = revealFile(path)
 		return toastMsg{"Saved to " + shortHome(path)}
 	})
@@ -2206,6 +2227,19 @@ func hasPhoto(msg store.MessageRow) bool {
 		}
 	}
 	return false
+}
+
+// openLinkSafe opens a link, but a risky one (plain http, an IP address,
+// look-alike punycode, a user@ prefix, an odd port) needs a second press,
+// with the reason shown first.
+func (m *Model) openLinkSafe(url string) tea.Cmd {
+	host, risk := linkRisk(url)
+	if risk != "" && m.confirmURL != url {
+		m.confirmURL = url
+		return m.flash("Careful: " + termSafe(host) + " " + risk + ". Press again to open it anyway.")
+	}
+	m.confirmURL = ""
+	return openLink(url)
 }
 
 // openLink opens a shared link in the browser.

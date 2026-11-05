@@ -1,8 +1,6 @@
 module github.com/ralph/tuon
 
-go 1.27.2
-
-toolchain go1.27.3
+go 1.27.3
 
 require (
 	github.com/blacktop/go-termimg v0.1.26
@@ -17,6 +15,7 @@ require (
 	go.mau.fi/mautrix-meta v0.2610.0
 	go.mau.fi/whatsmeow v0.0.0-20261014094007-f16f9ca30d6a
 	golang.org/x/image v0.47.0
+	golang.org/x/sys v0.49.0
 	golang.org/x/term v0.47.0
 	google.golang.org/protobuf v1.36.12
 	maunium.net/go/mautrix v0.32.0
@@ -89,7 +88,6 @@ require (
 	golang.org/x/exp v0.0.0-20261014143641-f0251eb4aa3e // indirect
 	golang.org/x/net v0.62.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
-	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect

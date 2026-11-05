@@ -1,0 +1,13 @@
+#!/bin/sh
+# Checks to run before every push or release (GitHub CI is off for now):
+# module checksums, build, vet, tests, known vulnerabilities.
+#
+#   ./scripts/check.sh
+set -eu
+cd "$(dirname "$0")/.."
+echo "== module checksums";  go mod verify
+echo "== build";             go build ./...
+echo "== vet";               go vet ./...
+echo "== tests";             go test ./...
+echo "== vulnerabilities";   go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+echo "== all checks passed"

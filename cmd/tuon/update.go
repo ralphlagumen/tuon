@@ -49,12 +49,12 @@ func update() error {
 		return err
 	}
 	fmt.Printf("\n  Fetching the latest tuon into %s…\n", src)
-	if out, err := git(src, "pull", "--ff-only"); err != nil {
-		return fmt.Errorf("git pull failed:\n%s", indent(out))
+	if out, err := git(src, "fetch", "--quiet"); err != nil {
+		return fmt.Errorf("git fetch failed:\n%s", indent(out))
 	}
-	after, err := git(src, "rev-parse", "HEAD")
+	after, err := git(src, "rev-parse", "@{u}")
 	if err != nil {
-		return err
+		return fmt.Errorf("this clone's branch doesn't track a remote: %w", err)
 	}
 	if before == after {
 		fmt.Println("  Already up to date.")
@@ -63,6 +63,28 @@ func update() error {
 	if log, err := git(src, "log", "--oneline", "--no-decorate", before+".."+after); err == nil && log != "" {
 		fmt.Println("  New:")
 		fmt.Println(indent(log))
+	}
+	// new or changed dependencies are where a supply-chain attack would
+	// come in: show them and ask before building anything
+	if deps, err := git(src, "diff", before+".."+after, "--", "go.mod"); err == nil && deps != "" {
+		fmt.Println("\n  This update changes tuon's dependencies (go.mod):")
+		fmt.Println(indent(changedRequires(deps)))
+		fmt.Println("\n  Only continue if you trust these changes (see the release notes or the diff).")
+		fmt.Print("  Type yes to continue: ")
+		if strings.TrimSpace(readLine()) != "yes" {
+			return errors.New("update cancelled: dependency changes not accepted")
+		}
+	} else if sums, err := git(src, "diff", "--stat", before+".."+after, "--", "go.sum"); err == nil && sums != "" {
+		return errors.New("go.sum changed without go.mod: refusing to build; check the repo")
+	}
+	if out, err := git(src, "merge", "--ff-only", "--quiet", after); err != nil {
+		return fmt.Errorf("couldn't fast-forward:\n%s", indent(out))
+	}
+	// every module must match the checksums Go recorded for it
+	verify := exec.Command("go", "mod", "verify")
+	verify.Dir = src
+	if out, err := verify.CombinedOutput(); err != nil {
+		return fmt.Errorf("dependency check failed, not building:\n%s", indent(strings.TrimSpace(string(out))))
 	}
 
 	fmt.Println("  Building…")
@@ -94,6 +116,19 @@ func update() error {
 		fmt.Println("  tuon is open in another window: quit it and start it again to use the update.")
 	}
 	return nil
+}
+
+// changedRequires keeps the added/removed module lines of a go.mod diff.
+func changedRequires(diff string) string {
+	var out []string
+	for _, l := range strings.Split(diff, "\n") {
+		if (strings.HasPrefix(l, "+") || strings.HasPrefix(l, "-")) && !strings.HasPrefix(l, "+++") && !strings.HasPrefix(l, "---") {
+			if t := strings.TrimSpace(l[1:]); t != "" {
+				out = append(out, l[:1]+" "+t)
+			}
+		}
+	}
+	return strings.Join(out, "\n")
 }
 
 func isClone(dir string) bool {

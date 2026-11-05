@@ -136,6 +136,9 @@ func (m Model) mainView() []string {
 	if m.statusErr {
 		status = sErr.Render(termSafe(m.status) + " ")
 	}
+	if m.warning != "" {
+		status = sErr.Render("⚠ "+termSafe(m.warning)) + "  " + status
+	}
 	out := []string{
 		spread(" "+sAccentB.Render("tuon")+"  "+sMuted.Render(m.platform), status, m.w),
 		joinRule("┬"),
@@ -1029,14 +1032,19 @@ func (m Model) linkCard(md connector.Media, maxW int) []string {
 		title = md.URL
 	}
 	lines := []string{sTheirs.Render(" ") + sAccent.Background(lipgloss.Color(cTheirs)).Render(fit("▸ "+termSafe(title), w)) + sTheirs.Render(" ")}
-	src := md.Source
-	if src == "" {
-		src = "Link"
+	// where it really goes: the domain, not the sender-chosen title
+	where := md.Source
+	if where == "" {
+		where = "Link"
 	}
-	hint := " · click to open"
-	if md.URL == "" {
-		hint = ""
+	hint := ""
+	if md.URL != "" {
+		host, risk := linkRisk(md.URL)
+		where, hint = host, " · click to open"
+		if risk != "" {
+			hint = " · ⚠ " + risk
+		}
 	}
-	lines = append(lines, sTheirs.Render(" "+fit(termSafe(src)+hint, w)+" "))
+	lines = append(lines, sTheirs.Render(" "+fit(termSafe(where)+hint, w)+" "))
 	return lines
 }

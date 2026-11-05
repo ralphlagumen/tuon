@@ -130,7 +130,9 @@ func run() error {
 	conn := messenger.New(creds, st.DB, log)
 	defer conn.Close()
 
-	p := tea.NewProgram(ui.New(ctx, st, conn, "messenger"), tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithContext(ctx))
+	model := ui.New(ctx, st, conn, "messenger")
+	model.Warn(diskWarning())
+	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithContext(ctx))
 
 	// Pass connector events to the UI. It sleeps until something arrives,
 	// then gathers whatever else comes within 30ms into one redraw, so a big

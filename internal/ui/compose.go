@@ -45,9 +45,12 @@ type (
 	}
 	pasteTextMsg string
 	copiedMsg    struct {
-		n   int
-		err error
+		n    int
+		err  error
+		text string
 	}
+	// clipClear: time to clear the clipboard if it still holds text
+	clipClear struct{ text string }
 )
 
 // isPathQuery: "@~/…", "@/…", "@./…" complete files; anything else is a person.
@@ -247,8 +250,15 @@ func sendAll(conn connector.Connector, ctx context.Context, chat connector.Chat,
 }
 
 func copyText(text string, n int) tea.Cmd {
-	return func() tea.Msg { return copiedMsg{n: n, err: copyToClipboard(text)} }
+	return func() tea.Msg { return copiedMsg{n: n, err: writeClipboard(text), text: text} }
 }
+
+// clipboardKeep: copied messages leave the clipboard after this, so they
+// don't sit in clipboard history or get pasted somewhere by mistake.
+var clipboardKeep = 60 * time.Second
+
+// readClipboard and writeClipboard are swappable in tests.
+var readClipboard, writeClipboard = clipboardText, copyToClipboard
 
 func (m Model) messagesText(from, to int) string {
 	var b strings.Builder
