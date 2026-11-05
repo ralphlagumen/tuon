@@ -11,7 +11,7 @@ These handle the network, your session or encryption. Read the diff of every upd
 |---|---|---|
 | `go.mau.fi/mautrix-meta` | Talks to Messenger, holds the session | v0.2610.0 |
 | `go.mau.fi/whatsmeow` | End-to-end encryption, device keys | v0.0.0-20261014094007-f16f9ca30d6a |
-| `go.mau.fi/libsignal` | Signal protocol (message encryption) | v0.2.2 |
+| `go.mau.fi/libsignal` | Signal protocol (message encryption) | v0.2.3 |
 | `github.com/beeper/req/v3` (replaces `imroc/req`) | HTTP client used by mautrix-meta | v3.0.0-20260925135712-b49593750e56 |
 | `github.com/beeper/poly1305`, `github.com/beeper/argo-go` | Crypto / protocol helpers | d4eede7bbf3c / v1.1.2 |
 | `golang.org/x/crypto` | Vault encryption, Argon2 | v0.58.0 |
