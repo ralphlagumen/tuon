@@ -18,7 +18,9 @@ cookies*.txt
 .claude/
 CLAUDE.md
 CLAUDE.local.md
-docs/plans/
+# Working docs (audit, plans) stay local; docs/img holds the README images
+docs/*
+!docs/img/
 
 # OS and editor clutter
 .DS_Store
