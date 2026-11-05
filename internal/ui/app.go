@@ -250,7 +250,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.st.Self = m.conn.SelfID()
 		}
 		m.reloadChats()
-		return m, nil
+		if msg.err != nil {
+			return m, nil
+		}
+		// messages still loading from an earlier run: keep trying the backup
+		var refills []tea.Cmd
+		for _, id := range m.st.MissingChats() {
+			refills = append(refills, m.startRefill(id))
+		}
+		return m, tea.Batch(refills...)
 
 	case EventsMsg:
 		return m, m.applyEvents(msg)
@@ -282,7 +290,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.refill(msg.chatID, msg.attempt)
 
 	case refillDoneMsg:
-		if msg.attempt+1 < len(refillAfter) && m.st.Waiting(msg.chatID) {
+		if msg.attempt+1 < maxRefills && m.st.Waiting(msg.chatID) {
 			return m, m.scheduleRefill(msg.chatID, msg.attempt+1)
 		}
 		delete(m.refilling, msg.chatID)
@@ -1324,8 +1332,13 @@ func (m *Model) loadNewest() tea.Cmd {
 }
 
 // refillAfter: when to look in the PIN backup again for a message that
-// couldn't be decrypted live. The phone has to back it up first.
-var refillAfter = []time.Duration{8 * time.Second, 30 * time.Second, time.Minute, 3 * time.Minute, 10 * time.Minute, 30 * time.Minute}
+// couldn't be decrypted live. The phone has to back it up first, which
+// takes seconds to minutes. After the list runs out, every 5 minutes.
+var refillAfter = []time.Duration{8 * time.Second, 20 * time.Second, 40 * time.Second, time.Minute, 2 * time.Minute, 3 * time.Minute, 5 * time.Minute}
+
+// maxRefills: about two hours of checks, then the next start or opening
+// the chat tries again.
+const maxRefills = 30
 
 // startRefill begins the backup checks for a chat, once at a time.
 func (m *Model) startRefill(chatID string) tea.Cmd {
@@ -1340,7 +1353,8 @@ func (m *Model) startRefill(chatID string) tea.Cmd {
 }
 
 func (m *Model) scheduleRefill(chatID string, attempt int) tea.Cmd {
-	return tea.Tick(refillAfter[attempt], func(time.Time) tea.Msg { return refillMsg{chatID, attempt} })
+	wait := refillAfter[min(attempt, len(refillAfter)-1)]
+	return tea.Tick(wait, func(time.Time) tea.Msg { return refillMsg{chatID, attempt} })
 }
 
 // refill fetches a chat's newest backed-up messages, which replace any

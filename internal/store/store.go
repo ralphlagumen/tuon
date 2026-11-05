@@ -271,6 +271,23 @@ func (s *Store) HasMissing(chatID string) bool {
 	return n > 0
 }
 
+// MissingChats lists chats that still have placeholders.
+func (s *Store) MissingChats() []string {
+	rows, err := s.DB.Query(`SELECT DISTINCT chat_id FROM tuon_messages WHERE media LIKE '%"Kind":"missing"%'`)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if rows.Scan(&id) == nil {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
 // Waiting: the chat has a placeholder, or activity newer than its newest message.
 func (s *Store) Waiting(chatID string) bool {
 	if s.HasMissing(chatID) {

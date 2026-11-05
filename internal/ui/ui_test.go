@@ -990,3 +990,20 @@ func TestUnknownSenderNameIsLookedUp(t *testing.T) {
 		t.Fatalf("name not shown:\n%s", s)
 	}
 }
+
+func TestPlaceholdersRetriedAtStart(t *testing.T) {
+	m, st, _ := newTestModel(t, 120, 30)
+	now := time.Now()
+	_ = st.UpsertChat(connector.Chat{ID: "j", LastActivity: now, Encrypted: true})
+	_, _ = st.AddMessage(connector.Message{ID: "m1", ChatID: "j", SenderID: "2", Time: now,
+		Media: []connector.Media{{Kind: connector.Missing}}}, false)
+	next, cmd := m.Update(startedMsg{})
+	m = next.(Model)
+	if !m.refilling["j"] || cmd == nil {
+		t.Fatal("a placeholder from an earlier run should start backup checks")
+	}
+	// checks keep going well past the first few, then stop
+	if got := refillAfter[min(maxRefills-1, len(refillAfter)-1)]; got != 5*time.Minute {
+		t.Fatalf("late checks every %v, want 5m", got)
+	}
+}

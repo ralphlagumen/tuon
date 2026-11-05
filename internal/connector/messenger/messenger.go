@@ -72,7 +72,10 @@ type Conn struct {
 	wadev *store.Device         // encrypted-chat identity
 	hdev  *securehistory.Device // backup device, once the PIN restore ran
 
-	e2eeOnce  sync.Once
+	e2eeOnce sync.Once
+	// resetAt: when we last dropped our session with a sender's device
+	// after it failed to decrypt (see resetSession)
+	resetAt   map[string]time.Time
 	fetchOnce sync.Once
 	ctx       context.Context
 	cancel    context.CancelFunc
@@ -549,6 +552,9 @@ func (c *Conn) noteEncrypted(chat waTypes.JID) table.ThreadType {
 // Show a placeholder instead of dropping it; the real message (same ID)
 // replaces it if a retry works or the PIN backup has it.
 func (c *Conn) onUndecryptable(evt *events.UndecryptableMessage) {
+	if !evt.IsUnavailable {
+		c.resetSession(evt.Info.Sender)
+	}
 	if evt.DecryptFailMode == events.DecryptFailHide {
 		return // reactions, receipts and the like: nothing to show
 	}
@@ -571,6 +577,34 @@ func (c *Conn) onUndecryptable(evt *events.UndecryptableMessage) {
 		Encrypted:    true,
 	}})
 	c.emit(connector.MessageEvent{Message: msg})
+}
+
+// resetSession drops our stored session with a sender's device after a
+// message from it failed to decrypt. The sender resends with the same
+// starting key, and libsignal reuses a session it already has for that key
+// instead of building a new one, so a broken copy fails every resend
+// ("no valid sessions"). With it gone, the next resend builds a fresh
+// session from our keys. At most once per device every 10 minutes.
+func (c *Conn) resetSession(sender waTypes.JID) {
+	addr := sender.SignalAddress().String()
+	c.mu.Lock()
+	wa := c.wa
+	if c.resetAt == nil {
+		c.resetAt = map[string]time.Time{}
+	}
+	recent := time.Since(c.resetAt[addr]) < 10*time.Minute
+	if !recent {
+		c.resetAt[addr] = time.Now()
+	}
+	c.mu.Unlock()
+	if wa == nil || recent {
+		return
+	}
+	if err := wa.Store.Sessions.DeleteSession(c.ctx, addr); err != nil {
+		c.log.Warn().Err(err).Str("device", addr).Msg("couldn't reset encrypted session")
+		return
+	}
+	c.log.Warn().Str("device", addr).Msg("reset encrypted session after a failed message")
 }
 
 func waContent(c *waConsumerApplication.ConsumerApplication_Content) (string, []connector.Media) {
