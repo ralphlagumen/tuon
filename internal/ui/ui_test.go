@@ -1414,3 +1414,60 @@ func TestClipboardClearsOnlyOurText(t *testing.T) {
 		t.Fatalf("wiped someone else's clipboard: %q", clip)
 	}
 }
+
+func TestIdleLockHidesChats(t *testing.T) {
+	m, _, _ := newTestModel(t, 120, 30)
+	m = seed(m)
+	m = key(m, "3")
+	if !strings.Contains(screen(m), "Dev Team") {
+		t.Fatal("setup: chat not shown")
+	}
+	asked := 0
+	m.SetLock(func() error { asked++; return nil }, nil, time.Minute)
+	m.lastInput = time.Now().Add(-2 * time.Minute)
+	next, cmd := m.Update(idleTick{})
+	m = next.(Model)
+	_ = cmd
+	if !m.locked || strings.Contains(screen(m), "Dev Team") || !strings.Contains(screen(m), "tuon is locked") {
+		t.Fatalf("not locked:\n%s", screen(m))
+	}
+	// keys do nothing but unlock while locked
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+	if m = next.(Model); !m.locked {
+		t.Fatal("q unlocked it")
+	}
+	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = run(next.(Model), cmd)
+	if m.locked || asked != 1 || !strings.Contains(screen(m), "Dev Team") {
+		t.Fatalf("Touch ID unlock failed (asked %d)", asked)
+	}
+}
+
+func TestPassphraseLock(t *testing.T) {
+	m, _, _ := newTestModel(t, 120, 30)
+	m.SetLock(nil, func(p string) bool { return p == "correct horse" }, time.Minute)
+	next, _ := m.runCommand("lock")
+	m = next.(Model)
+	if !m.locked {
+		t.Fatal(":lock didn't lock")
+	}
+	m = typeTextLocked(m, "nope")
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m = next.(Model); !m.locked || m.lockErr == "" {
+		t.Fatal("wrong passphrase unlocked")
+	}
+	m.unlocking = false // skip the wait
+	m = typeTextLocked(m, "correct horse")
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m = run(next.(Model), cmd); m.locked {
+		t.Fatal("right passphrase didn't unlock")
+	}
+}
+
+func typeTextLocked(m Model, s string) Model {
+	for _, r := range s {
+		next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m = next.(Model)
+	}
+	return m
+}

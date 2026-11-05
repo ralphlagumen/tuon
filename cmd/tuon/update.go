@@ -108,6 +108,16 @@ func update() error {
 		return err
 	}
 	fmt.Printf("  Updated %s.\n", exe)
+	if runtime.GOOS == "darwin" { // the Touch ID helper lives next to tuon
+		helper := filepath.Join(filepath.Dir(exe), "tuon-keyhelper")
+		sw := exec.Command("swiftc", "-O", "cmd/tuon-keyhelper/main.swift", "-o", helper+".new")
+		sw.Dir = src
+		if out, err := sw.CombinedOutput(); err != nil {
+			fmt.Printf("  Couldn't rebuild the Touch ID helper (kept the old one):\n%s\n", indent(strings.TrimSpace(string(out))))
+		} else if err := os.Rename(helper+".new", helper); err != nil {
+			return err
+		}
+	}
 
 	// a tuon that's open keeps running the old version until it restarts
 	if release, err := store.Lock(); err == nil {

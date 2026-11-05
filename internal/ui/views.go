@@ -66,10 +66,12 @@ func (m Model) View() string {
 		return ""
 	}
 	var lines []string
-	switch m.mode {
-	case modeHelp:
+	switch {
+	case m.locked:
+		lines = m.lockView() // nothing of the chats shows while locked
+	case m.mode == modeHelp:
 		lines = m.helpView()
-	case modeImage:
+	case m.mode == modeImage:
 		lines = m.imageView()
 	default:
 		lines = m.mainView()
@@ -931,6 +933,7 @@ func (m Model) helpView() []string {
 		head("commands"),
 		cmd(":mute", "mute or unmute the chat"),
 		cmd(":sound", "new-message sound and volume"),
+		cmd(":lock", "lock tuon now"),
 		cmd(":images on|off", "photos inside the chat"),
 		cmd(":quit", "quit"),
 		"",

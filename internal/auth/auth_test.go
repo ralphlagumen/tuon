@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/zalando/go-keyring"
@@ -64,5 +65,55 @@ func TestFallbackFileIsPrivate(t *testing.T) {
 	}
 	if c, err := Load(dir); err != nil || c.Cookies["xs"] != "2" {
 		t.Fatalf("load from file: %v", err)
+	}
+}
+
+type xorSealer struct{}
+
+func (xorSealer) Seal(b []byte) []byte {
+	out := make([]byte, len(b))
+	for i := range b {
+		out[i] = b[i] ^ 0x5a
+	}
+	return out
+}
+func (s xorSealer) Open(b []byte) ([]byte, error) { return s.Seal(b), nil }
+
+func TestSessionMovesIntoVault(t *testing.T) {
+	dir := t.TempDir()
+	store := map[string]string{}
+	keyringGet = func(s, a string) (string, error) {
+		if v, ok := store[s+a]; ok {
+			return v, nil
+		}
+		return "", keyring.ErrNotFound
+	}
+	keyringSet = func(s, a, v string) error { store[s+a] = v; return nil }
+	keyringDelete = func(s, a string) error { delete(store, s+a); return nil }
+	defer func() { keyringGet, keyringSet, keyringDelete = keyring.Get, keyring.Set, keyring.Delete }()
+
+	old := Creds{Platform: "facebook", Cookies: map[string]string{"c_user": "1", "xs": "secret"}}
+	if err := Save(dir, old); err != nil {
+		t.Fatal(err)
+	}
+	c, err := LoadSealed(dir, xorSealer{})
+	if err != nil || c.Cookies["xs"] != "secret" {
+		t.Fatalf("migrate: %+v %v", c, err)
+	}
+	if len(store) != 0 {
+		t.Fatal("session still in the keychain after moving into the vault")
+	}
+	raw, _ := os.ReadFile(filepath.Join(dir, "login.enc"))
+	if strings.Contains(string(raw), "secret") {
+		t.Fatal("login.enc holds the session in the clear")
+	}
+	if again, err := LoadSealed(dir, xorSealer{}); err != nil || again.Cookies["xs"] != "secret" {
+		t.Fatalf("reload: %v", err)
+	}
+	if err := Delete(dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "login.enc")); !os.IsNotExist(err) {
+		t.Fatal("logout left login.enc")
 	}
 }

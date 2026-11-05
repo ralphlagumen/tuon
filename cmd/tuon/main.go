@@ -18,6 +18,7 @@ import (
 	"github.com/ralph/tuon/internal/connector/messenger"
 	"github.com/ralph/tuon/internal/store"
 	"github.com/ralph/tuon/internal/ui"
+	"github.com/ralph/tuon/internal/vault"
 )
 
 func main() {
@@ -132,6 +133,13 @@ func run() error {
 
 	model := ui.New(ctx, st, conn, "messenger")
 	model.Warn(diskWarning())
+	if vlt != nil { // lock the screen after 10 idle minutes, or on :lock
+		var touch func() error
+		if h := vault.FindHelper(); vlt.Kind() == vault.KindEnclave && h != nil {
+			touch = func() error { return h.Check("unlock tuon") }
+		}
+		model.SetLock(touch, vlt.CheckPassphrase, 10*time.Minute)
+	}
 	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithContext(ctx))
 
 	// Pass connector events to the UI. It sleeps until something arrives,
@@ -176,7 +184,9 @@ func run() error {
 	fm.Cleanup()
 	// Messenger refreshes the session as it goes: keep the newest one.
 	if c := conn.Creds(); c.Valid() && os.Getenv("TUON_COOKIES") == "" {
-		_ = auth.Save(store.Dir(), c)
+		if v, err := openVault(); err == nil {
+			_ = auth.SaveSealed(store.Dir(), v, c)
+		}
 	}
 	if err == tea.ErrProgramKilled {
 		err = nil

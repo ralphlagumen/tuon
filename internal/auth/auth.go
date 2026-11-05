@@ -102,7 +102,7 @@ func Delete(dir string) error {
 	} else {
 		err = nil
 	}
-	for _, p := range []string{filePath(dir), legacyPath(dir)} {
+	for _, p := range []string{filePath(dir), legacyPath(dir), sealedPath(dir)} {
 		if e := os.Remove(p); e != nil && !os.IsNotExist(e) {
 			err = e
 		}
@@ -120,4 +120,61 @@ func ParseCookieLine(s string) map[string]string {
 		}
 	}
 	return out
+}
+
+// ---- sealed session (with the vault) ----
+
+// Sealer is the vault's encrypt/decrypt (kept as an interface so auth
+// doesn't depend on how the key is unlocked).
+type Sealer interface {
+	Seal([]byte) []byte
+	Open([]byte) ([]byte, error)
+}
+
+func sealedPath(dir string) string { return filepath.Join(dir, "login.enc") }
+
+// SaveSealed stores the session encrypted under the vault key, and removes
+// any older copy from the keychain or plain files: those are readable by
+// any program running as you.
+func SaveSealed(dir string, v Sealer, c Creds) error {
+	b, err := json.Marshal(c)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	tmp := sealedPath(dir) + ".tmp"
+	if err := os.WriteFile(tmp, v.Seal(b), 0o600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, sealedPath(dir)); err != nil {
+		return err
+	}
+	where = "vault"
+	_ = keyringDelete(service, account)
+	_ = os.Remove(filePath(dir))
+	_ = os.Remove(legacyPath(dir))
+	return nil
+}
+
+// LoadSealed reads the encrypted session. A session still in the keychain
+// or a plain file (from before the vault) is moved into the vault on the way.
+func LoadSealed(dir string, v Sealer) (Creds, error) {
+	if b, err := os.ReadFile(sealedPath(dir)); err == nil {
+		plain, err := v.Open(b)
+		if err != nil {
+			return Creds{}, fmt.Errorf("saved session can't be read with this key: %w", err)
+		}
+		var c Creds
+		if json.Unmarshal(plain, &c) == nil && c.Valid() {
+			return c, nil
+		}
+		return Creds{}, errors.New("saved session is damaged: run `tuon login`")
+	}
+	c, err := Load(dir) // the old places
+	if err != nil {
+		return Creds{}, err
+	}
+	return c, SaveSealed(dir, v, c)
 }

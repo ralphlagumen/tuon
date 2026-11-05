@@ -13,7 +13,6 @@ import (
 	zlog "github.com/rs/zerolog/log"
 	"golang.org/x/term"
 
-	"github.com/ralph/tuon/internal/auth"
 	"github.com/ralph/tuon/internal/connector"
 	"github.com/ralph/tuon/internal/connector/messenger"
 	"github.com/ralph/tuon/internal/store"
@@ -137,7 +136,10 @@ func keep(st *store.Store, conn *messenger.Conn) {
 
 // setup is the first-run path: log in if needed, then restore history.
 func setup() error {
-	if _, err := auth.Load(store.Dir()); err != nil {
+	if _, err := openVault(); err != nil { // a cancelled unlock isn't "not logged in"
+		return err
+	}
+	if _, err := loggedIn(); err != nil {
 		if err := login(); err != nil {
 			return err
 		}

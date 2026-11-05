@@ -14,6 +14,7 @@ require (
 	github.com/zalando/go-keyring v0.2.8
 	go.mau.fi/mautrix-meta v0.2610.0
 	go.mau.fi/whatsmeow v0.0.0-20261014094007-f16f9ca30d6a
+	golang.org/x/crypto v0.58.0
 	golang.org/x/image v0.47.0
 	golang.org/x/sys v0.49.0
 	golang.org/x/term v0.47.0
@@ -84,7 +85,6 @@ require (
 	go.mau.fi/libsignal v0.2.2 // indirect
 	go.mau.fi/util v0.11.0 // indirect
 	go.mau.fi/zeroconfig v0.2.0 // indirect
-	golang.org/x/crypto v0.58.0 // indirect
 	golang.org/x/exp v0.0.0-20261014143641-f0251eb4aa3e // indirect
 	golang.org/x/net v0.62.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect

@@ -100,8 +100,15 @@ type Model struct {
 	askedName    map[string]bool // senders whose name we already asked Messenger for
 	checkAt      time.Time       // a redraw is due then, to flip "sending…" to "not sent"
 	warning      string          // a lasting safety warning shown in the header
-	reacting     bool            // reaction picker open
-	selecting    bool            // stepping through messages (react, photo); else typing
+	lock         lockConfig      // the lock screen, once main turns it on
+	locked       bool
+	unlocking    bool
+	lockErr      string
+	lockFails    int
+	lockIn       textinput.Model
+	lastInput    time.Time
+	reacting     bool // reaction picker open
+	selecting    bool // stepping through messages (react, photo); else typing
 
 	// compose
 	input     textinput.Model // search and : commands
@@ -254,7 +261,7 @@ func (m Model) Cleanup() {
 func draftText(v string) string { return strings.TrimSpace(tokenRe.ReplaceAllString(v, "")) }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(func() tea.Msg { return startedMsg{m.conn.Start(m.ctx)} }, pruneLater())
+	return tea.Batch(func() tea.Msg { return startedMsg{m.conn.Start(m.ctx)} }, pruneLater(), idleLater())
 }
 
 // KeepMessages: the newest messages kept per chat (older ones load again
@@ -463,10 +470,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		if m.locked {
+			return m.onLockedKey(msg)
+		}
+		m.lastInput = time.Now()
 		return m.onKey(msg)
 
 	case tea.MouseMsg:
+		if m.locked {
+			return m, nil
+		}
+		m.lastInput = time.Now()
 		return m.onMouse(msg)
+
+	case idleTick:
+		if m.lockOn() && m.lock.after > 0 && !m.locked && time.Since(m.lastInput) >= m.lock.after {
+			return m, tea.Batch(m.lockNow(), idleLater())
+		}
+		return m, idleLater()
+
+	case unlockedMsg:
+		return m.onUnlocked(msg)
 	}
 	return m, nil
 }
@@ -1227,6 +1251,11 @@ func (m Model) runCommand(cmd string) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.reloadMessages(), m.flash(note))
 	case "help":
 		m.mode = modeHelp
+	case "lock":
+		if !m.lockOn() {
+			return m, m.flash("No lock set up")
+		}
+		return m, m.lockNow()
 	case "":
 	default:
 		return m, m.flash("unknown command: " + cmd)

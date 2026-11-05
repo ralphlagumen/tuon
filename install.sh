@@ -27,8 +27,20 @@ if [ "$(uname)" = "Darwin" ] && [ ! -d /Applications/Ghostty.app ] && [ ! -d "$H
   fi
 fi
 
+# the Touch ID lock: a small Swift helper that uses the Secure Enclave
+HELPER=""
+if [ "$(uname)" = "Darwin" ]; then
+  if command -v swiftc >/dev/null 2>&1; then
+    say "Building the Touch ID helper…"
+    swiftc -O cmd/tuon-keyhelper/main.swift -o bin/tuon-keyhelper && HELPER=1
+  else
+    say "No Swift compiler (xcode-select --install): tuon will use a passphrase instead of Touch ID."
+  fi
+fi
+
 mkdir -p "$PREFIX"
 install -m 0755 bin/tuon "$PREFIX/tuon"
+[ -n "$HELPER" ] && install -m 0755 bin/tuon-keyhelper "$PREFIX/tuon-keyhelper"
 say "Installed $PREFIX/tuon"
 
 case ":$PATH:" in

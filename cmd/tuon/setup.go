@@ -39,7 +39,11 @@ func loadLogin() (auth.Creds, error) {
 	if c := strings.TrimSpace(os.Getenv("TUON_COOKIES")); c != "" {
 		return auth.Creds{Platform: "messenger", Cookies: auth.ParseCookieLine(c)}, nil
 	}
-	if c, err := auth.Load(store.Dir()); err == nil {
+	v, err := openVault()
+	if err != nil {
+		return auth.Creds{}, err
+	}
+	if c, err := auth.LoadSealed(store.Dir(), v); err == nil {
 		return c, nil
 	}
 	if !term.IsTerminal(int(os.Stdin.Fd())) {
@@ -48,7 +52,7 @@ func loadLogin() (auth.Creds, error) {
 	if err := setup(); err != nil { // first run: log in, then offer history
 		return auth.Creds{}, err
 	}
-	return auth.Load(store.Dir())
+	return auth.LoadSealed(store.Dir(), v)
 }
 
 // login asks how to log in, then saves the session (never the password).
@@ -91,14 +95,14 @@ func login() error {
 	} else if !ok {
 		return errors.New("login cancelled: kept the other account's data")
 	}
-	if err := auth.Save(store.Dir(), creds); err != nil {
+	v, err := openVault()
+	if err != nil {
 		return err
 	}
-	if auth.Where() == "keychain" {
-		fmt.Println("  Logged in. Your session is saved in your system keychain.")
-	} else {
-		fmt.Println("  Logged in. Your session is saved in a file only you can read.")
+	if err := auth.SaveSealed(store.Dir(), v, creds); err != nil {
+		return err
 	}
+	fmt.Println("  Logged in. Your session is saved encrypted; only your unlock opens it.")
 	return nil
 }
 
