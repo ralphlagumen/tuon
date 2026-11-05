@@ -214,6 +214,11 @@ func (c *Conn) loadEncryptedHistory(ctx context.Context, chatID string, group bo
 			// placeholder under its own ID: apply it, drop the placeholder
 			c.emit(r)
 			c.emit(connector.MessageRemovedEvent{ID: placeholder})
+		} else {
+			// what kind of entry tuon couldn't show (types only, no content)
+			c.log.Warn().Str("chat", chatID).Str("id", m.Message.Message.GetMetadata().GetMessageID()).
+				Str("payload", fmt.Sprintf("%T", m.Message.Message.GetPayload())).Str("content", backupKind(m.Message)).
+				Msg("backup entry not shown")
 		}
 	}
 	// counts only, never message content
@@ -238,6 +243,15 @@ func (c *Conn) archiveReaction(chatID string, p *securehistory.DecryptedProtobuf
 		ChatID: chatID, MessageID: r.GetKey().GetID(),
 		ActorID: meta.GetSenderID(), Emoji: connector.SafeText(r.GetText(), false),
 	}, meta.GetMessageID(), true
+}
+
+// backupKind names the content type of a backed-up entry, for diagnostics.
+func backupKind(p *securehistory.DecryptedProtobuf) string {
+	content, ok := backupContent(p)
+	if !ok {
+		return "(not a consumer message)"
+	}
+	return fmt.Sprintf("%T", content.GetContent())
 }
 
 // backupContent unwraps a backed-up message to its content.
