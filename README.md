@@ -31,7 +31,7 @@ It's a personal tool that talks to Messenger the unofficial way. Read [Before yo
 - **Files** people send you save to your Downloads folder with one key. Tuon never opens or runs them.
 - **Keyboard first**, with the mouse working too: click a chat to open it, click a photo to view it, drag over messages to copy them.
 - **Quiet by default.** One soft sound for new messages, which you can change or turn off, and no "seen" receipts sent back.
-- **Locked and encrypted.** Opening tuon asks for Touch ID (or a passphrase off macOS), it locks itself when idle, and your session, messages and keys are encrypted on disk. The chat app runs in a sandbox that can't read your other secrets. See [SECURITY.md](SECURITY.md).
+- **Locked and encrypted.** Opening tuon asks for Touch ID (or a passphrase off macOS), it locks itself when idle, and your session, messages and keys are encrypted on disk. On macOS the chat app runs in a sandbox that keeps it away from common secret stores. See [SECURITY.md](SECURITY.md), including what it doesn't protect yet.
 
 <p align="center">
   <img src="docs/img/screen-unread.svg" alt="The Unread tab showing one unread chat across folders">
