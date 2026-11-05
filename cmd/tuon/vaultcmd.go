@@ -129,3 +129,23 @@ func loggedIn() (bool, error) {
 	}
 	return true, nil
 }
+
+// useVault turns on encryption in the store (unlocking first if the vault
+// exists but this run got its login another way) and seals anything still
+// stored in the clear.
+func useVault(st *store.Store) error {
+	if vlt == nil && !vault.Exists(store.Dir()) {
+		return nil
+	}
+	v, err := openVault()
+	if err != nil {
+		return err
+	}
+	st.SetCipher(v)
+	if n, err := st.EncryptAll(); err != nil {
+		return fmt.Errorf("encrypting stored messages: %w", err)
+	} else if n > 0 {
+		fmt.Printf("  Encrypted %d stored items.\n", n)
+	}
+	return nil
+}

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ralph/tuon/internal/connector"
+	"github.com/ralph/tuon/internal/vault"
 )
 
 func TestUnnamedChatsGetPeopleNames(t *testing.T) {
@@ -342,5 +343,73 @@ func TestMergeKeepsDraft(t *testing.T) {
 	}
 	if d := s.Drafts(); d["100001279802241"] != "see you at 7" || d["28147933184820682"] != "" {
 		t.Fatalf("drafts after merge: %v", d)
+	}
+}
+
+func TestSensitiveColumnsEncrypted(t *testing.T) {
+	s, err := OpenPath(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	now := time.Now()
+	// written before encryption was on
+	_, _ = s.AddMessage(connector.Message{ID: "old", ChatID: "c", SenderID: "2", Text: "old secret", Time: now.Add(-time.Hour)}, false)
+	_ = s.SaveDrafts(map[string]string{"c": "draft secret"})
+
+	v, err := vault.CreatePassphrase(t.TempDir(), "correct horse battery")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SetCipher(v)
+	if n, err := s.EncryptAll(); err != nil || n == 0 {
+		t.Fatalf("EncryptAll: %d, %v", n, err)
+	}
+	_, _ = s.AddMessage(connector.Message{ID: "new", ChatID: "c", SenderID: "2", Text: "new secret", Time: now,
+		Media: []connector.Media{{Kind: connector.Photo, Ref: "wa:image:KEYMATERIAL"}}}, false)
+	_, _ = s.AddMessage(connector.Message{ID: "ph", ChatID: "c", SenderID: "2", Time: now.Add(time.Second),
+		Media: []connector.Media{{Kind: connector.Missing}}}, false)
+
+	// the raw database holds none of it in the clear
+	for _, q := range []string{
+		`SELECT group_concat(text, '|') FROM tuon_messages`,
+		`SELECT group_concat(media, '|') FROM tuon_messages`,
+		`SELECT group_concat(snippet, '|') FROM tuon_chats`,
+		`SELECT group_concat(text, '|') FROM tuon_drafts`,
+	} {
+		var raw string
+		_ = s.DB.QueryRow(q).Scan(&raw)
+		if strings.Contains(raw, "secret") || strings.Contains(raw, "KEYMATERIAL") || strings.Contains(raw, "missing") {
+			t.Fatalf("%s leaks: %q", q, raw)
+		}
+	}
+	// and tuon still reads it all back
+	msgs, _ := s.Messages("c", 10, "1")
+	got := map[string]string{}
+	for _, m := range msgs {
+		got[m.ID] = m.Text
+		if m.ID == "new" && (len(m.Media) != 1 || m.Media[0].Ref != "wa:image:KEYMATERIAL") {
+			t.Fatalf("media not readable: %+v", m.Media)
+		}
+	}
+	if got["old"] != "old secret" || got["new"] != "new secret" {
+		t.Fatalf("texts = %v", got)
+	}
+	if !s.HasMissing("c") || len(s.MissingChats()) != 1 {
+		t.Fatal("placeholders not found once media is encrypted")
+	}
+	if c, _ := s.Chat("c"); c.Snippet != connector.MissingSnippet {
+		t.Fatalf("snippet = %q, want the placeholder line", c.Snippet)
+	}
+	if d := s.Drafts(); d["c"] != "draft secret" {
+		t.Fatalf("draft = %q", d["c"])
+	}
+	var sd int
+	_ = s.DB.QueryRow(`PRAGMA secure_delete`).Scan(&sd)
+	if sd != 1 {
+		t.Fatal("secure_delete is off")
+	}
+	if n, _ := s.EncryptAll(); n != 0 {
+		t.Fatalf("second EncryptAll re-sealed %d items", n)
 	}
 }

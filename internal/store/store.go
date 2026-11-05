@@ -32,6 +32,36 @@ const (
 type Store struct {
 	DB   *sql.DB
 	Self string // our own user ID, left out of group names
+	seal Cipher // encrypts sensitive columns; nil = plain (tests, before setup)
+}
+
+// Cipher encrypts single values for the database (the vault).
+type Cipher interface {
+	SealString(string) string
+	OpenString(string) (string, error)
+	IsSealed(string) bool
+}
+
+// SetCipher turns on encryption of message text and media, chat previews
+// and drafts. Rows written before stay readable (and EncryptAll seals them).
+func (s *Store) SetCipher(c Cipher) { s.seal = c }
+
+func (s *Store) enc(v string) string {
+	if s.seal == nil {
+		return v
+	}
+	return s.seal.SealString(v)
+}
+
+func (s *Store) dec(v string) string {
+	if s.seal == nil {
+		return v
+	}
+	out, err := s.seal.OpenString(v)
+	if err != nil {
+		return "[can't decrypt]"
+	}
+	return out
 }
 
 type ChatRow struct {
@@ -140,7 +170,9 @@ func Open() (*Store, error) {
 }
 
 func OpenPath(path string) (*Store, error) {
-	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
+	// secure_delete: deleted or overwritten rows are zeroed on disk, so old
+	// plain copies of encrypted text don't linger in free pages
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=secure_delete(1)")
 	if err != nil {
 		return nil, err
 	}
@@ -153,6 +185,11 @@ func OpenPath(path string) (*Store, error) {
 	// (we send no "seen"), so its updates can't make older messages unread.
 	_, _ = db.Exec(`ALTER TABLE tuon_chats ADD COLUMN read_ts INTEGER NOT NULL DEFAULT 0`)
 	_, _ = db.Exec(`ALTER TABLE tuon_messages ADD COLUMN reply_to TEXT NOT NULL DEFAULT ''`)
+	// missing: a "loading from your backup" placeholder (media is encrypted,
+	// so it can't be searched for)
+	if _, err := db.Exec(`ALTER TABLE tuon_messages ADD COLUMN missing INTEGER NOT NULL DEFAULT 0`); err == nil {
+		_, _ = db.Exec(`UPDATE tuon_messages SET missing = 1 WHERE media LIKE '%"Kind":"missing"%'`)
+	}
 	// first run with folders: start with Work and Personal (and move chats
 	// tagged before folders existed)
 	var n int
@@ -183,7 +220,7 @@ ON CONFLICT(id) DO UPDATE SET
 	last_ts   = MAX(last_ts, excluded.last_ts),
 	grp       = MAX(grp, excluded.grp),
 	encrypted = MAX(encrypted, excluded.encrypted)`,
-		c.ID, c.Name, c.Snippet, c.LastActivity.UnixMilli(), b2i(c.Unread), b2i(c.Group), b2i(c.Encrypted))
+		c.ID, c.Name, s.enc(c.Snippet), c.LastActivity.UnixMilli(), b2i(c.Unread), b2i(c.Group), b2i(c.Encrypted))
 	return err
 }
 
@@ -209,10 +246,10 @@ func (s *Store) AddMessage(m connector.Message, chatOpen bool) (bool, error) {
 	if exists && IsMissing(m.Media) {
 		return false, nil // a failed retry never replaces what we already have
 	}
-	_, err := s.DB.Exec(`INSERT INTO tuon_messages (id, chat_id, sender_id, text, ts, from_me, media, pending, reply_to)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET text = excluded.text, media = excluded.media,
+	_, err := s.DB.Exec(`INSERT INTO tuon_messages (id, chat_id, sender_id, text, ts, from_me, media, pending, reply_to, missing)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET text = excluded.text, media = excluded.media, missing = excluded.missing,
 	pending = excluded.pending, reply_to = CASE WHEN excluded.reply_to <> '' THEN excluded.reply_to ELSE reply_to END`,
-		m.ID, m.ChatID, m.SenderID, m.Text, m.Time.UnixMilli(), b2i(m.FromMe), media, b2i(m.Pending), m.ReplyToID)
+		m.ID, m.ChatID, m.SenderID, s.enc(m.Text), m.Time.UnixMilli(), b2i(m.FromMe), s.enc(media), b2i(m.Pending), m.ReplyToID, b2i(IsMissing(m.Media)))
 	if err != nil {
 		return false, err
 	}
@@ -250,7 +287,7 @@ ON CONFLICT(id) DO UPDATE SET
 	unread  = CASE WHEN excluded.last_ts > last_ts
 	               THEN (excluded.unread AND excluded.last_ts > read_ts) ELSE unread END,
 	last_ts = MAX(last_ts, excluded.last_ts)`,
-		m.ChatID, strings.Join(strings.Fields(snippet), " "), m.Time.UnixMilli(), b2i(unread))
+		m.ChatID, s.enc(strings.Join(strings.Fields(snippet), " ")), m.Time.UnixMilli(), b2i(unread))
 	return !exists, err
 }
 
@@ -271,13 +308,13 @@ func (s *Store) Behind(chatID string, activity time.Time) bool {
 // their real message.
 func (s *Store) HasMissing(chatID string) bool {
 	var n int
-	_ = s.DB.QueryRow(`SELECT COUNT(*) FROM tuon_messages WHERE chat_id = ? AND media LIKE '%"Kind":"missing"%'`, chatID).Scan(&n)
+	_ = s.DB.QueryRow(`SELECT COUNT(*) FROM tuon_messages WHERE chat_id = ? AND missing = 1`, chatID).Scan(&n)
 	return n > 0
 }
 
 // MissingChats lists chats that still have placeholders.
 func (s *Store) MissingChats() []string {
-	rows, err := s.DB.Query(`SELECT DISTINCT chat_id FROM tuon_messages WHERE media LIKE '%"Kind":"missing"%'`)
+	rows, err := s.DB.Query(`SELECT DISTINCT chat_id FROM tuon_messages WHERE missing = 1`)
 	if err != nil {
 		return nil
 	}
@@ -311,6 +348,12 @@ func (s *Store) contactName(id string) string {
 const chatCols = `c.id, c.name, c.snippet, c.last_ts, c.unread, c.grp, c.encrypted, c.space, c.muted,
 	COALESCE(NULLIF(c.name, ''), ct.name, c.id)`
 
+func (s *Store) scanChatRow(row interface{ Scan(...any) error }) (ChatRow, error) {
+	r, err := scanChat(row)
+	r.Snippet = s.dec(r.Snippet)
+	return r, err
+}
+
 func scanChat(rows interface{ Scan(...any) error }) (ChatRow, error) {
 	var r ChatRow
 	var ts int64
@@ -340,6 +383,7 @@ ORDER BY c.last_ts DESC`, query, string(space), space == Unread, query, likeText
 	var out []ChatRow
 	for rows.Next() {
 		r, err := scanChat(rows)
+		r.Snippet = s.dec(r.Snippet)
 		if err != nil {
 			return nil, err
 		}
@@ -357,7 +401,7 @@ ORDER BY c.last_ts DESC`, query, string(space), space == Unread, query, likeText
 
 func (s *Store) Chat(id string) (ChatRow, error) {
 	id = s.Resolve(id)
-	r, err := scanChat(s.DB.QueryRow(`SELECT `+chatCols+`
+	r, err := s.scanChatRow(s.DB.QueryRow(`SELECT `+chatCols+`
 FROM tuon_chats c LEFT JOIN tuon_contacts ct ON ct.id = c.id WHERE c.id = ?`, id))
 	if err == nil {
 		s.nameUnnamed(&r)
@@ -504,6 +548,7 @@ func (s *Store) Messages(chatID string, limit int, selfID string) ([]MessageRow,
 			return nil, err
 		}
 		r.Time = time.UnixMilli(ts)
+		r.Text, media = s.dec(r.Text), s.dec(media)
 		if media != "" {
 			_ = json.Unmarshal([]byte(media), &r.Media)
 		}
@@ -570,7 +615,7 @@ func (s *Store) Drafts() map[string]string {
 	for rows.Next() {
 		var id, text string
 		if rows.Scan(&id, &text) == nil {
-			out[id] = text
+			out[id] = s.dec(text)
 		}
 	}
 	return out
@@ -590,7 +635,7 @@ func (s *Store) SaveDrafts(drafts map[string]string) error {
 		if strings.TrimSpace(text) == "" {
 			continue
 		}
-		if _, err := tx.Exec(`INSERT INTO tuon_drafts (chat_id, text) VALUES (?, ?)`, id, text); err != nil {
+		if _, err := tx.Exec(`INSERT INTO tuon_drafts (chat_id, text) VALUES (?, ?)`, id, s.enc(text)); err != nil {
 			return err
 		}
 	}
@@ -612,6 +657,56 @@ func (s *Store) Account() string {
 		return jid[:i]
 	}
 	return ""
+}
+
+// EncryptAll seals everything written before encryption was on: message
+// text and media, chat previews, drafts. Then it checkpoints and compacts,
+// so no plain copy is left in the file. Safe to run every start.
+func (s *Store) EncryptAll() (int, error) {
+	if s.seal == nil {
+		return 0, nil
+	}
+	n := 0
+	seal := func(table, key, col string) error {
+		rows, err := s.DB.Query(`SELECT ` + key + `, ` + col + ` FROM ` + table + ` WHERE ` + col + ` <> '' AND ` + col + ` NOT LIKE 'v1:%'`)
+		if err != nil {
+			return err
+		}
+		type kv struct{ k, v string }
+		var todo []kv
+		for rows.Next() {
+			var x kv
+			if rows.Scan(&x.k, &x.v) == nil {
+				todo = append(todo, x)
+			}
+		}
+		rows.Close()
+		tx, err := s.DB.Begin()
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+		for _, x := range todo {
+			if _, err := tx.Exec(`UPDATE `+table+` SET `+col+` = ? WHERE `+key+` = ?`, s.seal.SealString(x.v), x.k); err != nil {
+				return err
+			}
+			n++
+		}
+		return tx.Commit()
+	}
+	for _, c := range [][3]string{
+		{"tuon_messages", "id", "text"}, {"tuon_messages", "id", "media"},
+		{"tuon_chats", "id", "snippet"}, {"tuon_drafts", "chat_id", "text"},
+	} {
+		if err := seal(c[0], c[1], c[2]); err != nil {
+			return n, err
+		}
+	}
+	if n > 0 { // push the change out of the WAL and rebuild the file
+		_, _ = s.DB.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
+		_, _ = s.DB.Exec(`VACUUM`)
+	}
+	return n, nil
 }
 
 // Compact gives back disk space once a quarter of the file is free pages
@@ -835,6 +930,7 @@ FROM tuon_messages m LEFT JOIN tuon_contacts ct ON ct.id = m.sender_id WHERE m.i
 				msgs[i].ReplyTo = &Quote{Name: "", Text: "an earlier message"}
 				continue
 			}
+			parent.Text, media = s.dec(parent.Text), s.dec(media)
 			if media != "" {
 				_ = json.Unmarshal([]byte(media), &parent.Media)
 			}

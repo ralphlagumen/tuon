@@ -233,6 +233,9 @@ func (v *Vault) OpenString(s string) (string, error) {
 // Sealed reports whether a stored string is already encrypted.
 func Sealed(s string) bool { return strings.HasPrefix(s, prefix) }
 
+// IsSealed is Sealed as a method, for the store's Cipher interface.
+func (v *Vault) IsSealed(s string) bool { return Sealed(s) }
+
 // Remove deletes the vault file (logout --wipe).
 func Remove(dir string) error {
 	err := os.Remove(filepath.Join(dir, fileName))

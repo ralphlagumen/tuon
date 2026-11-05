@@ -84,11 +84,22 @@ type Conn struct {
 	// so paging can tell when a page brought nothing new
 	threadsSeen atomic.Int64
 	known       map[int64]bool
+	seal        Sealer // encrypts the PIN-backup keys at rest; nil = plain
 	ctx         context.Context
 	cancel      context.CancelFunc
 }
 
 var _ connector.Connector = (*Conn)(nil)
+
+// Sealer encrypts stored secrets (the vault).
+type Sealer interface {
+	SealString(string) string
+	OpenString(string) (string, error)
+	IsSealed(string) bool
+}
+
+// SetSealer keeps the PIN-backup keys encrypted in the database.
+func (c *Conn) SetSealer(s Sealer) { c.seal = s }
 
 // New makes a Messenger connector from a saved login.
 // db holds the encrypted-chat keys (shared with Tuon's own store).

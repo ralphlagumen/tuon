@@ -46,11 +46,22 @@ func (c *Conn) historyDevice() *securehistory.Device {
 	if c.db.QueryRow(`SELECT data FROM tuon_history_device WHERE id = 1`).Scan(&data) != nil {
 		return nil
 	}
+	wasPlain := c.seal != nil && !c.seal.IsSealed(data)
+	if c.seal != nil && !wasPlain {
+		plain, err := c.seal.OpenString(data)
+		if err != nil {
+			return nil
+		}
+		data = plain
+	}
 	var d securehistory.Device
 	if json.Unmarshal([]byte(data), &d) != nil || d.ID == "" {
 		return nil
 	}
 	c.hdev = &d
+	if wasPlain { // saved before encryption: seal it now
+		go func() { _ = c.saveHistoryDevice(&d) }()
+	}
 	return c.hdev
 }
 
@@ -62,8 +73,12 @@ func (c *Conn) saveHistoryDevice(d *securehistory.Device) error {
 	if _, err := c.db.Exec(historyTable); err != nil {
 		return err
 	}
+	data := string(b)
+	if c.seal != nil {
+		data = c.seal.SealString(data)
+	}
 	if _, err := c.db.Exec(`INSERT INTO tuon_history_device (id, data) VALUES (1, ?)
-ON CONFLICT(id) DO UPDATE SET data = excluded.data`, string(b)); err != nil {
+ON CONFLICT(id) DO UPDATE SET data = excluded.data`, data); err != nil {
 		return err
 	}
 	c.mu.Lock()

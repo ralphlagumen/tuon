@@ -105,6 +105,9 @@ func run() error {
 		return err
 	}
 	defer st.Close()
+	if err := useVault(st); err != nil {
+		return err
+	}
 	_ = st.Prune(ui.KeepMessages)
 	_, _ = st.Compact()
 	trimPhotoCache(filepath.Join(store.Dir(), "cache", "img"))
@@ -129,6 +132,9 @@ func run() error {
 	defer cancel()
 
 	conn := messenger.New(creds, st.DB, log)
+	if vlt != nil {
+		conn.SetSealer(vlt)
+	}
 	defer conn.Close()
 
 	model := ui.New(ctx, st, conn, "messenger")

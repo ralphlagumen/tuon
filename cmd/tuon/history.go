@@ -35,6 +35,9 @@ func history() error {
 		return err
 	}
 	defer st.Close()
+	if err := useVault(st); err != nil {
+		return err
+	}
 	logFile, err := os.OpenFile(filepath.Join(store.Dir(), "tuon.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return err
@@ -47,6 +50,9 @@ func history() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	conn := messenger.New(creds, st.DB, log)
+	if vlt != nil {
+		conn.SetSealer(vlt)
+	}
 	fmt.Println("\n  Connecting to Messenger…")
 	if err := conn.Start(ctx); err != nil {
 		return err
