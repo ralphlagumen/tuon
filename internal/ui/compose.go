@@ -2,15 +2,12 @@ package ui
 
 import (
 	"context"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"mime"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -187,43 +184,33 @@ func attachPaths(paths []string) tea.Cmd {
 }
 
 // pasteClipboard: an image on the clipboard is attached; a copied file
-// (from Finder) is attached; plain text is typed into the box.
+// (from the file manager) is attached; plain text is typed into the box.
 func pasteClipboard() tea.Cmd {
 	return func() tea.Msg {
-		if runtime.GOOS != "darwin" {
-			return attachedMsg{err: errors.New("pasting images works on macOS only")}
+		if data, err := clipboardImage(); err == nil && len(data) > 0 {
+			name := "pasted-" + time.Now().Format("150405") + ".png"
+			return attachedMsg{files: []connector.Attachment{{Name: name, Mime: "image/png", Data: data}}}
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if out, err := exec.CommandContext(ctx, "osascript", "-e", "the clipboard as «class PNGf»").Output(); err == nil {
-			s := string(out)
-			if i := strings.Index(s, "PNGf"); i >= 0 {
-				h := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(s[i+4:]), "»"))
-				if data, err := hex.DecodeString(h); err == nil && len(data) > 0 {
-					name := "pasted-" + time.Now().Format("150405") + ".png"
-					return attachedMsg{files: []connector.Attachment{{Name: name, Mime: "image/png", Data: data}}}
-				}
+		if p := clipboardFile(); p != "" {
+			a, err := readAttachment(p)
+			if err != nil {
+				return attachedMsg{err: err}
 			}
+			return attachedMsg{files: []connector.Attachment{a}}
 		}
-		if out, err := exec.CommandContext(ctx, "osascript", "-e", "POSIX path of (the clipboard as «class furl»)").Output(); err == nil {
-			if p := strings.TrimSpace(string(out)); p != "" {
-				a, err := readAttachment(p)
-				if err != nil {
-					return attachedMsg{err: err}
-				}
-				return attachedMsg{files: []connector.Attachment{a}}
-			}
-		}
-		if out, err := exec.CommandContext(ctx, "pbpaste").Output(); err == nil && len(out) > 0 {
-			return pasteTextMsg(out)
+		if t := clipboardText(); t != "" {
+			return pasteTextMsg(t)
 		}
 		return attachedMsg{err: errors.New("nothing to paste")}
 	}
 }
 
 // sendAll sends the files, then the text (if any).
-func sendAll(conn connector.Connector, ctx context.Context, chatID, text string, mentions []connector.Mention, files []connector.Attachment) tea.Cmd {
+func sendAll(conn connector.Connector, ctx context.Context, chat connector.Chat, text string, mentions []connector.Mention, files []connector.Attachment, reply *connector.ReplyRef) tea.Cmd {
+	// files first, then the text (Messenger shows them as separate messages)
+	chatID := chat.ID
 	return func() tea.Msg {
+		conn.KnowChat(chat)
 		for _, f := range files {
 			ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 			err := conn.SendFile(ctx, chatID, f)
@@ -235,22 +222,14 @@ func sendAll(conn connector.Connector, ctx context.Context, chatID, text string,
 		if text == "" {
 			return sentMsg{}
 		}
-		return sentMsg{conn.Send(ctx, chatID, text, mentions)}
+		return sentMsg{conn.Send(ctx, chatID, text, mentions, reply)}
 	}
 }
 
 func copyText(text string, n int) tea.Cmd {
-	return func() tea.Msg {
-		if runtime.GOOS == "darwin" {
-			cmd := exec.Command("pbcopy")
-			cmd.Stdin = strings.NewReader(text)
-			return copiedMsg{n: n, err: cmd.Run()}
-		}
-		return copiedMsg{err: errors.New("copy works on macOS only")}
-	}
+	return func() tea.Msg { return copiedMsg{n: n, err: copyToClipboard(text)} }
 }
 
-// messagesText is what gets copied: "Name: text" per message.
 func (m Model) messagesText(from, to int) string {
 	var b strings.Builder
 	for i := max(0, from); i <= min(to, len(m.msgs)-1); i++ {

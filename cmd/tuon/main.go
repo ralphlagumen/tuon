@@ -3,65 +3,116 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/rs/zerolog"
 	zlog "github.com/rs/zerolog/log"
 
+	"github.com/ralph/tuon/internal/auth"
 	"github.com/ralph/tuon/internal/connector/messenger"
 	"github.com/ralph/tuon/internal/store"
 	"github.com/ralph/tuon/internal/ui"
 )
 
 func main() {
-	for _, a := range os.Args[1:] {
-		switch a {
+	// stay lean: collect garbage sooner, and aim to stay under 96 MB
+	debug.SetGCPercent(50)
+	debug.SetMemoryLimit(96 << 20)
+	privateFiles() // everything tuon writes is readable only by you
+	args := os.Args[1:]
+	if len(args) > 0 {
+		switch args[0] {
 		case "--here", "-here": // tuon always runs in place now; kept for old habits
+		case "setup":
+			if err := setup(); err != nil {
+				fail(err)
+			}
+			return
 		case "login":
-			if _, err := login(); err != nil {
-				fmt.Fprintln(os.Stderr, "tuon:", err)
-				os.Exit(1)
+			if err := login(); err != nil {
+				fail(err)
+			}
+			if err := history(); err != nil { // a new login may be a new account
+				fmt.Fprintln(os.Stderr, "  Couldn't restore history:", err)
+			}
+			return
+		case "history":
+			if err := history(); err != nil {
+				fail(err)
+			}
+			return
+		case "logout":
+			if err := logout(len(args) > 1 && args[1] == "--wipe"); err != nil {
+				fail(err)
 			}
 			return
 		case "-h", "--help", "help":
 			fmt.Print(usage)
 			return
 		default:
-			fmt.Fprintf(os.Stderr, "tuon: unknown option %q\n\n%s", a, usage)
+			fmt.Fprintf(os.Stderr, "tuon: unknown option %q\n\n%s", args[0], usage)
 			os.Exit(2)
 		}
 	}
-	if err := run(); err != nil {
-		fmt.Fprintln(os.Stderr, "tuon:", err)
-		os.Exit(1)
+	for {
+		err := run()
+		if !errors.Is(err, messenger.ErrLoggedOut) {
+			if err != nil {
+				fail(err)
+			}
+			return
+		}
+		// the session expired: log in again right here, then open tuon
+		fmt.Println("\n  Messenger logged you out. Log in again to keep going.")
+		if err := login(); err != nil {
+			fail(err)
+		}
 	}
 }
 
+func fail(err error) {
+	fmt.Fprintln(os.Stderr, "tuon:", err)
+	os.Exit(1)
+}
+
 func run() error {
-	cookies, err := loadCookies()
+	creds, err := loadLogin()
 	if err != nil {
 		return err
 	}
+	release, err := store.Lock()
+	if err != nil {
+		return err
+	}
+	defer release()
+	cleanTemp()
+	defer cleanTemp()
 
 	st, err := store.Open()
 	if err != nil {
 		return err
 	}
 	defer st.Close()
+	_ = st.Prune(1000)
+	trimPhotoCache(filepath.Join(store.Dir(), "cache", "img"))
 
 	// Logs go to a file so they never draw over the UI.
-	logFile, err := os.OpenFile(filepath.Join(store.Dir(), "tuon.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	logPath := filepath.Join(store.Dir(), "tuon.log")
+	trimLog(logPath)
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return err
 	}
 	defer logFile.Close()
 	level := zerolog.WarnLevel
 	if os.Getenv("TUON_DEBUG") != "" {
-		level = zerolog.DebugLevel
+		level = zerolog.DebugLevel // may log message details: only for troubleshooting
 	}
 	zerolog.SetGlobalLevel(level)
 	log := zerolog.New(logFile).With().Timestamp().Logger()
@@ -70,29 +121,37 @@ func run() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	conn := messenger.New(cookies, st.DB, log)
+	conn := messenger.New(creds, st.DB, log)
 	defer conn.Close()
 
 	p := tea.NewProgram(ui.New(ctx, st, conn, "messenger"), tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithContext(ctx))
 
-	// Pass connector events to the UI in small batches so a big sync
-	// doesn't redraw hundreds of times.
+	// Pass connector events to the UI. It sleeps until something arrives,
+	// then gathers whatever else comes within 30ms into one redraw, so a big
+	// sync doesn't redraw hundreds of times and an idle tuon uses no CPU.
 	go func() {
-		tick := time.NewTicker(30 * time.Millisecond)
-		defer tick.Stop()
-		var batch []any
 		for {
+			var batch []any
 			select {
 			case e := <-conn.Events():
 				batch = append(batch, e)
-			case <-tick.C:
-				if len(batch) > 0 {
-					p.Send(ui.EventsMsg(batch))
-					batch = nil
-				}
 			case <-ctx.Done():
 				return
 			}
+			wait := time.NewTimer(30 * time.Millisecond)
+		gather:
+			for {
+				select {
+				case e := <-conn.Events():
+					batch = append(batch, e)
+				case <-wait.C:
+					break gather
+				case <-ctx.Done():
+					wait.Stop()
+					return
+				}
+			}
+			p.Send(ui.EventsMsg(batch))
 		}
 	}()
 
@@ -105,11 +164,17 @@ func run() error {
 	}
 
 	final, err := p.Run()
-	if fm, ok := final.(ui.Model); ok {
-		fm.Cleanup()
+	fm, _ := final.(ui.Model)
+	fm.Cleanup()
+	// Messenger refreshes the session as it goes: keep the newest one.
+	if c := conn.Creds(); c.Valid() && os.Getenv("TUON_COOKIES") == "" {
+		_ = auth.Save(store.Dir(), c)
 	}
 	if err == tea.ErrProgramKilled {
 		err = nil
+	}
+	if err == nil && fm.LoggedOut() {
+		return messenger.ErrLoggedOut
 	}
 	return err
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +12,7 @@ import (
 	"github.com/rs/zerolog"
 	zlog "github.com/rs/zerolog/log"
 
+	"github.com/ralph/tuon/internal/auth"
 	"github.com/ralph/tuon/internal/connector/messenger"
 	"github.com/ralph/tuon/internal/store"
 )
@@ -25,10 +25,11 @@ func TestLive(t *testing.T) {
 	if os.Getenv("TUON_LIVE") == "" {
 		t.Skip("set TUON_LIVE=1 to run against the real account")
 	}
-	b, err := os.ReadFile(filepath.Join(store.Dir(), "cookies.txt"))
+	release, err := store.Lock()
 	if err != nil {
-		t.Fatal(err)
+		t.Skip(err) // tuon is open: don't share its encryption keys
 	}
+	defer release()
 	st, err := store.Open()
 	if err != nil {
 		t.Fatal(err)
@@ -42,7 +43,7 @@ func TestLive(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	conn := messenger.New(strings.TrimSpace(string(b)), st.DB, log)
+	conn := messenger.New(liveCreds(t), st.DB, log)
 	defer conn.Close()
 
 	m := New(ctx, st, conn, "messenger")
@@ -95,4 +96,12 @@ pump:
 		}
 		t.Logf("chat %q: %d messages loaded\n%s", m.chat.Display, len(m.msgs), ansi.Strip(m.View()))
 	}
+}
+
+func liveCreds(t *testing.T) auth.Creds {
+	c, err := auth.Load(store.Dir())
+	if err != nil {
+		t.Skip("not logged in")
+	}
+	return c
 }

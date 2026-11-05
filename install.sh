@@ -36,4 +36,9 @@ case ":$PATH:" in
      say "  export PATH=\"$PREFIX:\$PATH\"" ;;
 esac
 
-say "Done. Open Ghostty and run: tuon"
+# log in and restore older encrypted chats, when there's someone to answer
+if [ -t 0 ] && [ -t 1 ] && [ -z "${TUON_SKIP_SETUP:-}" ]; then
+  "$PREFIX/tuon" setup || say "Setup didn't finish. Run \`tuon setup\` any time."
+fi
+
+say "Done. Run: tuon  (in Ghostty, kitty or WezTerm for real photos)"

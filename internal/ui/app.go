@@ -4,12 +4,11 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"image"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
@@ -17,6 +16,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/ralph/tuon/internal/connector"
+	"github.com/ralph/tuon/internal/connector/messenger"
 	"github.com/ralph/tuon/internal/store"
 )
 
@@ -47,11 +47,12 @@ const (
 )
 
 const (
-	pageSize     = 200 // messages kept on screen per chat
-	thumbMaxCols = 64  // widest inline photo, in cells (1 cell = 1 px wide)
-	settingImage = "images"
-	settingSound = "sound"
-	maxSugg      = 5
+	pageSize      = 200 // messages kept on screen per chat
+	thumbMaxCols  = 64  // widest inline photo, in cells (1 cell = 1 px wide)
+	settingImage  = "images"
+	settingBlocks = "blocks"
+	settingSound  = "sound"
+	maxSugg       = 5
 )
 
 // Quick reactions, same set as Messenger.
@@ -76,11 +77,18 @@ type Model struct {
 	tagFor string        // chat ID while the tag popup is open
 	spaces []store.Space // your folders, then Inbox
 
+	// people search: people shown under the chats while searching
+	found      []store.Person // people shown under the chats while searching
+	remote     []store.Person // from Messenger's search, for the current query
+	searchSeq  int
+	personView *store.Person // the person under the cursor (right pane hint)
+
 	// folder manager (f)
 	folders     bool
 	folderCur   int
 	folderOp    string // "add" or "rename" while naming
 	folderAskRm bool   // waiting for y to confirm delete
+	folderMove  bool   // m: carrying the folder; ↑↓ move it, enter drops
 
 	// chat
 	chat         *store.ChatRow
@@ -88,39 +96,56 @@ type Model struct {
 	selID        string // selected message; "" = follow the newest
 	scroll       int    // lines scrolled up from the bottom
 	loadingOlder bool
-	reacting     bool // reaction picker open
-	selecting    bool // stepping through messages (react, photo); else typing
+	synced       map[string]bool // encrypted chats already filled from the PIN backup this run
+	reacting     bool            // reaction picker open
+	selecting    bool            // stepping through messages (react, photo); else typing
 
 	// compose
 	input     textinput.Model // search and : commands
 	inputKind inputKind
-	compose   textinput.Model // the message box; focused whenever a chat is open
+	compose   box // the message box; focused whenever a chat is open
 	drafts    map[string]string
-	people    []store.Person         // who can be @mentioned in the open chat
-	mentions  []connector.Mention    // tagged so far in the draft
-	sugg      []suggestion           // @ pop-up: people or files
-	atts      []connector.Attachment // files waiting to go with the next send
-	dragFrom  int                    // mouse drag over messages (copy); -1 = none
+	draftAtts map[string][]pendingFile
+	attSeq    int                 // numbers [Image #n] tokens in the current draft
+	people    []store.Person      // who can be @mentioned in the open chat
+	mentions  []connector.Mention // tagged so far in the draft
+	sugg      []suggestion        // @ pop-up: people or files
+	atts      []pendingFile       // files in the draft, shown as [Image #n] tokens
+	replyTo   *store.MessageRow   // the message the draft replies to
+	dragFrom  int                 // mouse drag over messages (copy); -1 = none
 	dragTo    int
 	suggIdx   int
 	suggOff   bool // esc closed suggestions for this draft position
 
 	// images
-	imagesOn bool
-	raw      map[string][]byte
-	imgs     map[string]image.Image
-	pending  map[string]bool
-	failed   map[string]string // ref -> error, so we don't retry forever
-	imgIdx   int               // in image view: index into chatImages()
-	kitty    *kittyImages      // real photos (Ghostty/kitty); nil = pixel blocks
+	imagesOn  bool
+	blocks    bool // pixel previews where real photos can't be drawn (off by default)
+	raw       map[string][]byte
+	imgs      map[string]image.Image
+	pending   map[string]bool
+	failed    map[string]string // ref -> error, so we don't retry forever
+	imgIdx    int               // in image view: index into chatImages()
+	recent    []string          // photo refs, oldest first (for letting old ones go)
+	kitty     *kittyImages      // real photos (Ghostty/kitty); nil = pixel blocks
+	albumWait []connector.Media // photos to open in the viewer once all have loaded
+	gallery   []connector.Media // photos the full-screen view flips through
 
 	status    string
 	statusErr bool
 	toast     string
 
+	loggedOut bool      // Messenger rejected the login: main runs the login again
 	started   time.Time // messages older than this never chime
 	soundOn   bool
+	soundName string
+	soundVol  int // percent, 10-200
 	lastChime time.Time
+
+	// sound picker (:sound)
+	soundPick  bool
+	soundCur   int
+	soundNames []string
+	soundUndo  [3]string // name, volume, on — restored by esc
 }
 
 // Bubble Tea messages.
@@ -133,38 +158,45 @@ type (
 		img image.Image
 		err error
 	}
-	sentMsg      struct{ err error }
-	toastMsg     struct{ text string }
-	clearToast   struct{}
-	olderDoneMsg struct{ err error }
+	sentMsg       struct{ err error }
+	toastMsg      struct{ text string }
+	clearToast    struct{}
+	olderDoneMsg  struct{ err error }
+	newestDoneMsg struct{ err error }
+	searchTick    struct{ seq int }
+	peopleMsg     struct {
+		seq    int
+		people []connector.Person
+	}
 )
 
 func New(ctx context.Context, st *store.Store, conn connector.Connector, platform string) Model {
 	in := textinput.New()
 	in.Prompt = ""
 	in.CharLimit = 4000
-	co := textinput.New()
-	co.Prompt = ""
-	co.CharLimit = 4000
 	m := Model{
-		ctx:      ctx,
-		st:       st,
-		conn:     conn,
-		platform: platform,
-		space:    store.Work,
-		imagesOn: st.Setting(settingImage, "on") == "on",
-		soundOn:  st.Setting(settingSound, "on") == "on",
-		started:  time.Now(),
-		raw:      map[string][]byte{},
-		imgs:     map[string]image.Image{},
-		pending:  map[string]bool{},
-		failed:   map[string]string{},
-		input:    in,
-		compose:  co,
-		drafts:   map[string]string{},
-		dragFrom: -1,
-		dragTo:   -1,
-		status:   "connecting…",
+		ctx:       ctx,
+		st:        st,
+		conn:      conn,
+		platform:  platform,
+		space:     firstFolder(st),
+		imagesOn:  st.Setting(settingImage, "on") == "on",
+		blocks:    st.Setting(settingBlocks, "off") == "on",
+		soundOn:   st.Setting(settingSound, "on") == "on",
+		soundName: st.Setting("sound_name", defaultSound),
+		soundVol:  atoiOr(st.Setting("sound_volume", "100"), 100),
+		started:   time.Now(),
+		raw:       map[string][]byte{},
+		imgs:      map[string]image.Image{},
+		pending:   map[string]bool{},
+		failed:    map[string]string{},
+		input:     in,
+		compose:   newBox(),
+		draftAtts: map[string][]pendingFile{},
+		drafts:    map[string]string{},
+		dragFrom:  -1,
+		dragTo:    -1,
+		status:    "connecting…",
 	}
 	if kittyMode {
 		m.kitty = newKittyImages(os.Stdout, filepath.Join(store.Dir(), "cache", "img"))
@@ -172,6 +204,9 @@ func New(ctx context.Context, st *store.Store, conn connector.Connector, platfor
 	m.reloadChats()
 	return m
 }
+
+// LoggedOut reports that tuon quit because Messenger logged you out.
+func (m Model) LoggedOut() bool { return m.loggedOut }
 
 // Cleanup frees photos held by the terminal. Call after the program ends.
 func (m Model) Cleanup() {
@@ -194,6 +229,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case startedMsg:
+		if errors.Is(msg.err, messenger.ErrLoggedOut) { // quit; main asks you to log in again
+			m.loggedOut = true
+			return m, tea.Quit
+		}
 		if msg.err != nil {
 			m.status, m.statusErr = "login failed: "+msg.err.Error()+" — update ~/.config/tuon/cookies.txt", true
 		} else {
@@ -212,9 +251,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.failed[msg.ref] = msg.err.Error()
 		} else {
 			m.raw[msg.ref] = msg.raw
-			m.imgs[msg.ref] = msg.img
+			if msg.img != nil {
+				m.imgs[msg.ref] = msg.img
+			}
+			m.remember(msg.ref)
 		}
 		m.keepSelectionVisible()
+		if len(m.albumWait) > 0 {
+			return m, m.previewAlbum(m.albumWait) // opens once every photo is in
+		}
 		return m, nil
 
 	case sentMsg:
@@ -223,9 +268,44 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case newestDoneMsg:
+		if msg.err != nil && m.chat != nil && m.chat.Encrypted {
+			return m, m.flash("couldn't load messages from the backup: " + msg.err.Error())
+		}
+		return m, nil
+
 	case olderDoneMsg:
 		m.loadingOlder = false
+		if msg.err != nil && m.chat != nil && m.chat.Encrypted {
+			return m, m.flash("couldn't load older messages: " + msg.err.Error())
+		}
 		return m, nil
+
+	case searchTick:
+		if msg.seq != m.searchSeq || len([]rune(m.query)) < 2 {
+			return m, nil
+		}
+		conn, ctx, q, seq := m.conn, m.ctx, m.query, msg.seq
+		return m, func() tea.Msg {
+			ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
+			found, _ := conn.SearchPeople(ctx, q)
+			return peopleMsg{seq: seq, people: found}
+		}
+
+	case peopleMsg:
+		if msg.seq != m.searchSeq {
+			return m, nil // an older search
+		}
+		selected := m.rowKey(m.cursor) // keep the highlight on the same row's person
+		m.remote = nil
+		for _, p := range msg.people {
+			_ = m.st.UpsertContact(p.ID, p.Name)
+			m.remote = append(m.remote, store.Person{ID: p.ID, Name: p.Name})
+		}
+		m.updatePeople()
+		m.restoreCursor(selected)
+		return m, m.preview()
 
 	case toastMsg:
 		return m, m.flash(msg.text)
@@ -234,15 +314,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			return m, m.flash("couldn't attach: " + msg.err.Error())
 		}
-		m.atts = append(m.atts, msg.files...)
+		for _, f := range msg.files {
+			m.attSeq++
+			kind := "File"
+			if f.IsImage() {
+				kind = "Image"
+			}
+			tok := fmt.Sprintf("[%s #%d]", kind, m.attSeq)
+			m.atts = append(m.atts, pendingFile{token: tok, file: f})
+			ins := tok + " "
+			if v := []rune(m.compose.Value()); m.compose.Position() > 0 && v[m.compose.Position()-1] != ' ' && v[m.compose.Position()-1] != '\n' {
+				ins = " " + ins
+			}
+			m.compose.InsertString(ins)
+		}
 		return m, nil
 
 	case pasteTextMsg:
-		v, pos := []rune(m.compose.Value()), m.compose.Position()
-		ins := []rune(strings.TrimRight(string(msg), "\n"))
-		pos = min(pos, len(v))
-		m.compose.SetValue(string(v[:pos]) + string(ins) + string(v[pos:]))
-		m.compose.SetCursor(pos + len(ins))
+		m.compose.InsertString(strings.TrimRight(string(msg), "\n"))
 		m.updateSuggestions()
 		return m, nil
 
@@ -283,12 +372,16 @@ func (m *Model) applyEvents(evts []any) tea.Cmd {
 		switch e := e.(type) {
 		case connector.ContactEvent:
 			_ = m.st.UpsertContact(e.ID, e.Name)
+		case connector.ChatAliasEvent:
+			_ = m.st.Merge(e.From, e.To)
 		case connector.ChatEvent:
+			e.Chat.ID = m.st.Resolve(e.Chat.ID)
 			if e.Chat.ID == openID {
 				e.Chat.Unread = false
 			}
 			_ = m.st.UpsertChat(e.Chat)
 		case connector.MessageEvent:
+			e.Message.ChatID = m.st.Resolve(e.Message.ChatID)
 			isNew, _ := m.st.AddMessage(e.Message, e.Message.ChatID == openID)
 			if isNew && !e.Message.FromMe && e.Message.Time.After(m.started) {
 				if c, err := m.st.Chat(e.Message.ChatID); err == nil && !c.Muted {
@@ -298,8 +391,10 @@ func (m *Model) applyEvents(evts []any) tea.Cmd {
 		case connector.MessageRemovedEvent:
 			_ = m.st.RemoveMessage(e.ID)
 		case connector.ReactionEvent:
+			e.ChatID = m.st.Resolve(e.ChatID)
 			_ = m.st.SetReaction(e)
 		case connector.ParticipantEvent:
+			e.ChatID = m.st.Resolve(e.ChatID)
 			_ = m.st.AddParticipant(e)
 		case connector.StatusEvent:
 			m.status, m.statusErr = e.Text, e.Err != nil
@@ -308,51 +403,48 @@ func (m *Model) applyEvents(evts []any) tea.Cmd {
 			}
 		}
 	}
+	_ = m.st.MergeOneToOne()
 	if openID != "" {
+		openID = m.st.Resolve(openID)
 		_ = m.st.MarkRead(openID)
 	}
 	m.reloadChats()
 	cmd := m.reloadMessages()
 	if chime && m.soundOn && time.Since(m.lastChime) > 2*time.Second {
 		m.lastChime = time.Now()
-		return tea.Batch(cmd, playChime)
+		name, vol := m.soundName, m.soundVol
+		return tea.Batch(cmd, func() tea.Msg { playSound(name, vol); return nil })
 	}
 	return cmd
 }
 
-// playChime: one soft tick for new messages (macOS "Tink", half volume).
-func playChime() tea.Msg {
-	if runtime.GOOS == "darwin" {
-		_ = exec.Command("afplay", "-v", "0.5", "/System/Library/Sounds/Tink.aiff").Start()
-	} else {
-		fmt.Print("\a")
+func atoiOr(s string, def int) int {
+	var n int
+	if _, err := fmt.Sscan(s, &n); err != nil {
+		return def
 	}
-	return nil
+	return n
 }
 
+// playChime: one soft tick for new messages (macOS "Tink", half volume).
+// playChime: one soft tick for new messages.
+
 func (m *Model) reloadChats() {
-	selected := ""
-	if m.cursor < len(m.chats) {
-		selected = m.chats[m.cursor].ID
-	}
+	selected := m.rowKey(m.cursor)
 	m.spaces = m.st.Spaces()
 	known := false
 	for _, sp := range m.spaces {
 		known = known || sp == m.space
 	}
-	if !known { // the folder was renamed or deleted
+	if !known && m.space != store.Unread { // the folder was renamed or deleted
 		m.space = m.spaces[0]
 	}
 	m.chats, _ = m.st.Chats(m.space, m.query)
 	m.counts = m.st.UnreadCounts()
 	// keep the cursor on the same chat when the list reorders
-	m.cursor = min(m.cursor, max(0, len(m.chats)-1))
-	for i, c := range m.chats {
-		if c.ID == selected {
-			m.cursor = i
-			break
-		}
-	}
+	m.updatePeople()
+	m.cursor = min(m.cursor, max(0, m.rowCount()-1))
+	m.restoreCursor(selected)
 }
 
 // reloadMessages refreshes the open chat and starts fetching visible photos.
@@ -366,12 +458,12 @@ func (m *Model) reloadMessages() tea.Cmd {
 	m.msgs, _ = m.st.Messages(m.chat.ID, pageSize, m.conn.SelfID())
 	m.people, _ = m.st.People(m.chat.ID, m.conn.SelfID())
 	m.keepSelectionVisible()
-	if !m.imagesOn {
-		return nil
+	if !m.drawsPhotos() {
+		return nil // photos show as "View photo": load them only when opened
 	}
 	var cmds []tea.Cmd
 	// only the most recent photos, so opening a chat stays fast
-	for i := len(m.msgs) - 1; i >= 0 && i >= len(m.msgs)-30; i-- {
+	for i := len(m.msgs) - 1; i >= 0 && i >= len(m.msgs)-12; i-- {
 		for _, md := range m.msgs[i].Media {
 			if cmd := m.fetch(md); cmd != nil {
 				cmds = append(cmds, cmd)
@@ -381,9 +473,25 @@ func (m *Model) reloadMessages() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
+// drawsPhotos: whether this terminal shows photos in the chat at all.
+func (m Model) drawsPhotos() bool { return m.imagesOn && (m.kitty != nil || m.blocks) }
+
+// fetch loads a photo. Downloaded bytes are kept small (compressed); the
+// decoded picture, which is far bigger, is made only when it will be drawn.
 func (m *Model) fetch(md connector.Media) tea.Cmd {
-	if md.Kind != connector.Photo || md.Ref == "" || m.pending[md.Ref] || m.imgs[md.Ref] != nil || m.failed[md.Ref] != "" {
+	if md.Kind != connector.Photo || md.Ref == "" || m.pending[md.Ref] || m.failed[md.Ref] != "" {
 		return nil
+	}
+	decode := m.drawsPhotos() || m.mode == modeImage
+	if raw := m.raw[md.Ref]; raw != nil {
+		if !decode || m.imgs[md.Ref] != nil {
+			return nil
+		}
+		m.pending[md.Ref] = true
+		return func() tea.Msg { // decode again from memory, no download
+			img, err := decodeImage(raw)
+			return mediaMsg{ref: md.Ref, raw: raw, img: img, err: err}
+		}
 	}
 	m.pending[md.Ref] = true
 	conn, ctx := m.conn, m.ctx
@@ -394,8 +502,43 @@ func (m *Model) fetch(md connector.Media) tea.Cmd {
 		if err != nil {
 			return mediaMsg{ref: md.Ref, err: err}
 		}
+		if !decode {
+			return mediaMsg{ref: md.Ref, raw: b}
+		}
 		img, err := decodeImage(b)
 		return mediaMsg{ref: md.Ref, raw: b, img: img, err: err}
+	}
+}
+
+const (
+	keepDecoded = 12 // decoded photos (big) kept in memory
+	keepRaw     = 40 // downloaded photos (small) kept in memory
+)
+
+// remember keeps the newest photos and lets older ones go, so memory
+// stays flat however many photos you scroll past.
+func (m *Model) remember(ref string) {
+	for i, r := range m.recent {
+		if r == ref {
+			m.recent = append(m.recent[:i], m.recent[i+1:]...)
+			break
+		}
+	}
+	m.recent = append(m.recent, ref)
+	for i, r := range m.recent {
+		age := len(m.recent) - 1 - i
+		if age >= keepDecoded {
+			delete(m.imgs, r)
+		}
+		if age >= keepRaw {
+			delete(m.raw, r)
+		}
+	}
+	if len(m.recent) > keepRaw {
+		m.recent = m.recent[len(m.recent)-keepRaw:]
+	}
+	if len(thumbCache) > 200 {
+		thumbCache = map[string][]string{}
 	}
 }
 
@@ -471,6 +614,9 @@ func (m Model) onKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.folders {
 		return m.onFolderKey(k)
 	}
+	if m.soundPick {
+		return m.onSoundKey(k)
+	}
 	if m.reacting {
 		return m.onReactKey(k)
 	}
@@ -500,7 +646,7 @@ func (m Model) composing() bool {
 
 func (m *Model) sizeInput() {
 	m.input.Width = max(10, m.rightWidth()-6)
-	m.compose.Width = max(10, m.rightWidth()-6)
+	m.compose.SetWidth(max(10, m.rightWidth()-4))
 }
 
 func (m *Model) startInput(kind inputKind, value string) tea.Cmd {
@@ -541,12 +687,22 @@ func (m Model) onInputKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.runCommand(val)
 		case inputFolder:
 			return m.finishFolderName(val)
+		case inputSearch: // open what's highlighted, right away
+			if p := m.personAt(m.cursor); p != nil {
+				return m, m.openPerson(*p)
+			}
+			if m.cursor < len(m.chats) {
+				c := m.chats[m.cursor]
+				m.query, m.remote, m.found = "", nil, nil
+				m.reloadChats()
+				return m, m.openChat(c)
+			}
 		}
 		return m, m.preview()
 	case "down", "up":
 		if m.inputKind == inputSearch { // move through results while searching
 			if k.String() == "down" {
-				m.cursor = min(m.cursor+1, max(0, len(m.chats)-1))
+				m.cursor = min(m.cursor+1, max(0, m.rowCount()-1))
 			} else {
 				m.cursor = max(m.cursor-1, 0)
 			}
@@ -558,8 +714,12 @@ func (m Model) onInputKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.inputKind == inputSearch {
 		m.query = m.input.Value()
 		m.cursor = 0
+		m.remote = nil
 		m.reloadChats()
-		return m, tea.Batch(cmd, m.preview())
+		m.searchSeq++
+		seq := m.searchSeq
+		ask := tea.Tick(350*time.Millisecond, func(time.Time) tea.Msg { return searchTick{seq} })
+		return m, tea.Batch(cmd, m.preview(), ask)
 	}
 	return m, cmd
 }
@@ -591,12 +751,25 @@ func (m Model) onComposeKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch k.String() {
 	case "ctrl+v":
 		return m, pasteClipboard()
-	case "backspace":
-		if m.compose.Value() == "" && len(m.atts) > 0 {
-			m.atts = m.atts[:len(m.atts)-1]
+	case "ctrl+o": // newest photo, no need to select it first
+		if imgs := m.chatImages(); len(imgs) > 0 {
+			return m, m.openPhoto(imgs[len(imgs)-1])
+		}
+		return m, m.flash("no photos in this chat")
+	case "backspace": // right after a file token: remove the whole token
+		v := []rune(m.compose.Value())
+		pos := min(m.compose.Position(), len(v))
+		if tok := tokenBefore(string(v[:pos])); tok != "" {
+			start := pos - len([]rune(tok))
+			m.compose.SetValue(string(v[:start]) + string(v[pos:]))
+			m.compose.SetCursor(start)
 			return m, nil
 		}
 	case "esc", "tab":
+		if k.String() == "esc" && m.replyTo != nil { // esc first cancels the reply
+			m.replyTo = nil
+			return m, nil
+		}
 		m.leaveChat()
 		return m, nil
 	case "up":
@@ -615,17 +788,22 @@ func (m Model) onComposeKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+l":
 		return m, tea.ClearScreen
 	case "enter":
-		val := strings.TrimSpace(m.compose.Value())
-		if val == "" && len(m.atts) == 0 {
+		val, files := splitDraft(m.compose.Value(), m.atts)
+		if val == "" && len(files) == 0 {
 			return m, nil
 		}
 		mentions := keptMentions(val, m.mentions)
-		files := m.atts
 		m.compose.SetValue("")
 		delete(m.drafts, m.chat.ID)
-		m.mentions, m.sugg, m.suggOff, m.atts = nil, nil, false, nil
+		delete(m.draftAtts, m.chat.ID)
+		m.mentions, m.sugg, m.suggOff, m.atts, m.attSeq = nil, nil, false, nil, 0
 		m.selID, m.scroll = "", 0
-		cmd := sendAll(m.conn, m.ctx, m.chat.ID, val, mentions, files)
+		var reply *connector.ReplyRef
+		if m.replyTo != nil && val != "" {
+			reply = &connector.ReplyRef{ID: m.replyTo.ID, SenderID: m.replyTo.SenderID}
+		}
+		m.replyTo = nil
+		cmd := sendAll(m.conn, m.ctx, m.chat.Chat, val, mentions, files, reply)
 		if len(files) > 0 {
 			return m, tea.Batch(cmd, m.flash(fmt.Sprintf("Sending %d file(s)…", len(files))))
 		}
@@ -645,14 +823,15 @@ func (m Model) onComposeKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *Model) leaveChat() {
 	if m.chat != nil {
 		if v := m.compose.Value(); v != "" {
-			m.drafts[m.chat.ID] = v
+			m.drafts[m.chat.ID], m.draftAtts[m.chat.ID] = v, m.atts
 		} else {
 			delete(m.drafts, m.chat.ID)
+			delete(m.draftAtts, m.chat.ID)
 		}
 	}
 	m.compose.Blur()
 	m.focus, m.selecting, m.sugg = focusList, false, nil
-	m.selID = ""
+	m.selID, m.replyTo = "", nil
 }
 
 func (m Model) mentionQuery() (at int, query string, ok bool) {
@@ -752,7 +931,13 @@ func (m Model) runCommand(cmd string) (tea.Model, tea.Cmd) {
 	case "sound off", "sound on":
 		m.soundOn = cmd == "sound on"
 		_ = m.st.SetSetting(settingSound, strings.TrimPrefix(cmd, "sound "))
-		return m, m.flash("chime " + strings.TrimPrefix(cmd, "sound "))
+		return m, m.flash("Sound " + strings.TrimPrefix(cmd, "sound "))
+	case "sound", "sounds", "notification", "notifications":
+		m.openSoundPicker()
+	case "images blocks", "images noblocks":
+		m.blocks = cmd == "images blocks"
+		_ = m.st.SetSetting(settingBlocks, map[bool]string{true: "on", false: "off"}[m.blocks])
+		return m, m.flash(map[bool]string{true: "Pixel previews on", false: "Pixel previews off"}[m.blocks])
 	case "images off", "images on":
 		m.imagesOn = cmd == "images on"
 		_ = m.st.SetSetting(settingImage, strings.TrimPrefix(cmd, "images "))
@@ -786,7 +971,15 @@ func (m *Model) switchSpace(s store.Space) {
 // preview shows the chat under the list cursor on the right, without
 // opening it (it stays unread until you go in).
 func (m *Model) preview() tea.Cmd {
-	if m.focus != focusList || m.cursor >= len(m.chats) {
+	m.personView = nil
+	if m.focus != focusList {
+		return nil
+	}
+	if p := m.personAt(m.cursor); p != nil {
+		m.personView, m.chat = p, nil
+		return nil
+	}
+	if m.cursor >= len(m.chats) {
 		return nil
 	}
 	c := m.chats[m.cursor]
@@ -795,12 +988,12 @@ func (m *Model) preview() tea.Cmd {
 	}
 	m.chat = &c
 	m.selID, m.scroll, m.selecting, m.reacting = "", 0, false, false
-	return m.reloadMessages()
+	return tea.Batch(m.reloadMessages(), m.loadNewest())
 }
 
 func (m Model) onListKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	move := func(to int) (tea.Model, tea.Cmd) {
-		m.cursor = max(0, min(to, len(m.chats)-1))
+		m.cursor = max(0, min(to, m.rowCount()-1))
 		return m, m.preview()
 	}
 	space := func(s store.Space) (tea.Model, tea.Cmd) {
@@ -826,12 +1019,14 @@ func (m Model) onListKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if i := int(k.String()[0] - '1'); i < len(m.spaces) {
 			return space(m.spaces[i])
 		}
+	case "u":
+		return space(store.Unread)
 	case "right", "l":
 		return space(m.nextSpace(1))
 	case "left", "h":
 		return space(m.nextSpace(-1))
 	case "f":
-		m.folders, m.folderCur, m.folderAskRm = true, 0, false
+		m.folders, m.folderCur, m.folderAskRm, m.folderMove = true, 0, false, false
 		for i, sp := range m.spaces {
 			if sp == m.space {
 				m.folderCur = i
@@ -850,6 +1045,9 @@ func (m Model) onListKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+l":
 		return m, tea.ClearScreen
 	case "enter", "tab":
+		if p := m.personAt(m.cursor); p != nil {
+			return m, m.openPerson(*p)
+		}
 		if m.cursor < len(m.chats) {
 			return m, m.openChat(m.chats[m.cursor])
 		}
@@ -858,12 +1056,31 @@ func (m Model) onListKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) nextSpace(d int) store.Space {
-	for i, x := range m.spaces {
+	tabs := m.tabSpaces()
+	for i, x := range tabs {
 		if x == m.space {
-			return m.spaces[(i+d+len(m.spaces))%len(m.spaces)]
+			return tabs[(i+d+len(tabs))%len(tabs)]
 		}
 	}
-	return m.spaces[0]
+	return tabs[0]
+}
+
+// unreadTotal: unread chats across all folders.
+func (m Model) unreadTotal() int {
+	n := 0
+	for _, c := range m.counts {
+		n += c
+	}
+	return n
+}
+
+// tabSpaces: the tabs shown. Unread comes first, but only while something
+// is unread (or you're on it).
+func (m Model) tabSpaces() []store.Space {
+	if m.unreadTotal() > 0 || m.space == store.Unread {
+		return append([]store.Space{store.Unread}, m.spaces...)
+	}
+	return m.spaces
 }
 
 func (m Model) onTagKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -903,23 +1120,46 @@ func (m Model) onFolderKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
+	shift := func(d int) {
+		if cur == store.Inbox {
+			return
+		}
+		to := m.folderCur + d
+		if to < 0 || to > n-2 { // Inbox stays last
+			return
+		}
+		if m.st.MoveSpace(cur, d) == nil {
+			m.folderCur = to
+		}
+		m.reloadChats()
+	}
+	if m.folderMove { // carrying a folder: arrows move it
+		switch k.String() {
+		case "up", "k", "shift+up", "K":
+			shift(-1)
+		case "down", "j", "shift+down", "J":
+			shift(1)
+		case "enter", "m", "esc", " ":
+			m.folderMove = false
+		}
+		return m, nil
+	}
 	switch k.String() {
 	case "esc", "f", "q":
 		m.folders = false
+	case "m", " ":
+		if cur == store.Inbox {
+			return m, m.flash("Inbox always stays last")
+		}
+		m.folderMove = true
 	case "up", "k":
 		m.folderCur = max(0, m.folderCur-1)
 	case "down", "j":
 		m.folderCur = min(n-1, m.folderCur+1)
 	case "shift+up", "K":
-		if cur != store.Inbox && m.st.MoveSpace(cur, -1) == nil && m.folderCur > 0 {
-			m.folderCur--
-		}
-		m.reloadChats()
+		shift(-1)
 	case "shift+down", "J":
-		if cur != store.Inbox && m.folderCur < n-2 && m.st.MoveSpace(cur, 1) == nil {
-			m.folderCur++
-		}
-		m.reloadChats()
+		shift(1)
 	case "a", "n":
 		m.folderOp = "add"
 		return m, m.startInput(inputFolder, "")
@@ -975,19 +1215,42 @@ func (m *Model) openChat(c store.ChatRow) tea.Cmd {
 	m.mentions, m.sugg = nil, nil
 	m.compose.SetValue(m.drafts[c.ID])
 	m.compose.CursorEnd()
+	m.atts, m.attSeq = m.draftAtts[c.ID], len(m.draftAtts[c.ID])
 	m.sizeInput()
 	focus := m.compose.Focus()
 	_ = m.st.MarkRead(c.ID)
 	cmd := m.reloadMessages()
 	m.reloadChats()
-	if len(m.msgs) < 20 && !c.Encrypted {
+	newest := m.loadNewest()
+	if len(m.msgs) < 20 && newest == nil {
 		return tea.Batch(focus, cmd, m.loadOlder())
 	}
-	return tea.Batch(focus, cmd)
+	return tea.Batch(focus, cmd, newest)
+}
+
+// loadNewest fills an encrypted chat from the PIN backup once per run:
+// messages that couldn't be decrypted live, or arrived while tuon was
+// closed, are there.
+func (m *Model) loadNewest() tea.Cmd {
+	if m.chat == nil || !m.chat.Encrypted || m.synced[m.chat.ID] {
+		return nil
+	}
+	if m.synced == nil {
+		m.synced = map[string]bool{}
+	}
+	m.synced[m.chat.ID] = true
+	known := m.chat.Chat
+	conn, ctx, id := m.conn, m.ctx, m.chat.ID
+	return func() tea.Msg {
+		conn.KnowChat(known) // its ID may be the person's, not a thread the connector has seen
+		ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		defer cancel()
+		return newestDoneMsg{conn.LoadOlder(ctx, id, time.Now().Add(time.Minute), "")}
+	}
 }
 
 func (m *Model) loadOlder() tea.Cmd {
-	if m.chat == nil || m.loadingOlder || m.chat.Encrypted {
+	if m.chat == nil || m.loadingOlder {
 		return nil
 	}
 	m.loadingOlder = true
@@ -995,8 +1258,10 @@ func (m *Model) loadOlder() tea.Cmd {
 	if len(m.msgs) > 0 {
 		before, beforeID = m.msgs[0].Time, m.msgs[0].ID
 	}
+	known := m.chat.Chat
 	conn, ctx, id := m.conn, m.ctx, m.chat.ID
 	return func() tea.Msg {
+		conn.KnowChat(known)
 		ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 		defer cancel()
 		return olderDoneMsg{conn.LoadOlder(ctx, id, before, beforeID)}
@@ -1011,7 +1276,13 @@ func (m Model) onSelectKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.compose.Focus()
 	}
 	switch k.String() {
-	case "esc", "i", "enter":
+	case "enter": // reply to the selected message
+		if sel >= 0 && sel < len(m.msgs) && !m.msgs[sel].Pending {
+			r := m.msgs[sel]
+			m.replyTo = &r
+		}
+		return back()
+	case "esc", "i":
 		return back()
 	case "tab":
 		m.leaveChat()
@@ -1049,6 +1320,13 @@ func (m Model) onSelectKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "?":
 		m.mode = modeHelp
 	case "o":
+		if sel >= 0 && sel < len(m.msgs) && !hasPhoto(m.msgs[sel]) {
+			for _, md := range m.msgs[sel].Media {
+				if md.Kind == connector.Link && md.URL != "" {
+					return m, openLink(md.URL)
+				}
+			}
+		}
 		imgs := m.chatImages()
 		if len(imgs) == 0 {
 			return m, m.flash("no photos in this chat")
@@ -1064,9 +1342,7 @@ func (m Model) onSelectKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 			}
 		}
-		m.mode = modeImage
-		delete(m.failed, imgs[m.imgIdx].Ref) // o also retries a failed photo
-		return m, m.fetch(imgs[m.imgIdx])
+		return m, m.openPhoto(imgs[m.imgIdx])
 	}
 	return m, nil
 }
@@ -1089,9 +1365,26 @@ func (m Model) onMouse(e tea.MouseMsg) (tea.Model, tea.Cmd) {
 		case tea.MouseActionRelease:
 			from, to := min(m.dragFrom, m.dragTo), max(m.dragFrom, m.dragTo)
 			m.dragFrom, m.dragTo = -1, -1
-			if from >= 0 && from != to || e.Y >= 0 && m.messageAt(e.Y) == from && from >= 0 {
+			if from < 0 {
+				return m, nil
+			}
+			if from != to { // dragged over several messages: copy them
 				return m, copyText(m.messagesText(from, to), to-from+1)
 			}
+			// a click: open its photo or link, or select the message
+			for _, md := range m.msgs[from].Media {
+				if md.Kind == connector.Photo && md.Ref != "" {
+					return m, m.openPhoto(md)
+				}
+			}
+			for _, md := range m.msgs[from].Media {
+				if md.Kind == connector.Link && md.URL != "" {
+					return m, openLink(md.URL)
+				}
+			}
+			m.focus, m.selecting = focusChat, true
+			m.compose.Blur()
+			m.selectIndex(from)
 			return m, nil
 		}
 	}
@@ -1111,7 +1404,7 @@ func (m Model) onMouse(e tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 		if inList {
 			if m.focus == focusList {
-				m.cursor = max(0, min(m.cursor+d, len(m.chats)-1))
+				m.cursor = max(0, min(m.cursor+d, m.rowCount()-1))
 				return m, m.preview()
 			}
 			return m, nil
@@ -1168,8 +1461,9 @@ func (m Model) onReactKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	default:
 		return m, nil
 	}
-	conn, ctx, chatID := m.conn, m.ctx, m.chat.ID
+	conn, ctx, chatID, chat := m.conn, m.ctx, m.chat.ID, m.chat.Chat
 	return m, func() tea.Msg {
+		conn.KnowChat(chat)
 		if err := conn.React(ctx, chatID, msg.ID, msg.SenderID, emoji); err != nil {
 			return toastMsg{"reaction failed: " + err.Error()}
 		}
@@ -1189,8 +1483,16 @@ func (m Model) chatImages() []connector.Media {
 	return out
 }
 
+// viewImages: the photos the full-screen view flips through.
+func (m Model) viewImages() []connector.Media {
+	if len(m.gallery) > 0 {
+		return m.gallery
+	}
+	return m.chatImages()
+}
+
 func (m Model) onImageKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
-	imgs := m.chatImages()
+	imgs := m.viewImages()
 	if len(imgs) == 0 {
 		m.mode = modeMain
 		return m, nil
@@ -1199,11 +1501,11 @@ func (m Model) onImageKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	cur := imgs[m.imgIdx]
 	switch k.String() {
 	case "esc", "q", "o":
-		m.mode = modeMain
+		m.mode, m.gallery = modeMain, nil
 	case "h", "left", "[":
 		m.imgIdx = max(0, m.imgIdx-1)
 		return m, m.fetch(imgs[m.imgIdx])
-	case "l", "right", "]":
+	case "l", "right", "]", " ":
 		m.imgIdx = min(len(imgs)-1, m.imgIdx+1)
 		return m, m.fetch(imgs[m.imgIdx])
 	case "O":
@@ -1214,34 +1516,147 @@ func (m Model) onImageKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// saveImage writes the photo to ~/Downloads (s) or a temp file opened in the system viewer (O).
 func (m Model) saveImage(ref string, open bool) tea.Cmd {
 	b := m.raw[ref]
 	if b == nil {
 		return func() tea.Msg { return toastMsg{"photo still loading"} }
 	}
 	return func() tea.Msg {
-		dir := os.TempDir()
-		if !open {
-			home, _ := os.UserHomeDir()
-			dir = filepath.Join(home, "Downloads")
+		if open {
+			path, err := tempPhoto(b)
+			if err == nil {
+				err = openFile(path)
+			}
+			if err != nil {
+				return toastMsg{"open failed: " + err.Error()}
+			}
+			return toastMsg{"opened in viewer"}
 		}
-		name := "tuon-" + time.Now().Format("20060102-150405") + extFor(b)
-		path := filepath.Join(dir, name)
+		path := filepath.Join(downloadsDir(), "tuon-"+time.Now().Format("20060102-150405")+extFor(b))
 		if err := os.WriteFile(path, b, 0o600); err != nil {
 			return toastMsg{"save failed: " + err.Error()}
 		}
-		if !open {
-			return toastMsg{"saved " + path}
+		return toastMsg{"saved " + path}
+	}
+}
+
+// openPhoto shows a photo: full screen inside Tuon where the terminal can
+// draw it, otherwise the real file in the system's photo viewer.
+// openPhoto opens a photo together with the rest of its album.
+func (m *Model) openPhoto(md connector.Media) tea.Cmd {
+	for i := range m.msgs {
+		for _, x := range m.msgs[i].Media {
+			if x.Ref == md.Ref {
+				return m.openAlbum(m.albumAt(i), md.Ref)
+			}
 		}
-		opener := "xdg-open"
-		if runtime.GOOS == "darwin" {
-			opener = "open"
+	}
+	return m.openAlbum([]connector.Media{md}, md.Ref)
+}
+
+// openAlbum shows photos as a gallery: full screen inside Tuon where the
+// terminal can draw them, otherwise all of them in the system's viewer.
+func (m *Model) openAlbum(photos []connector.Media, startRef string) tea.Cmd {
+	if len(photos) == 0 {
+		return nil
+	}
+	for _, p := range photos {
+		delete(m.failed, p.Ref) // opening also retries failed photos
+	}
+	if m.kitty == nil {
+		return m.previewAlbum(photos)
+	}
+	m.gallery, m.imgIdx = photos, 0
+	for i, p := range photos {
+		if p.Ref == startRef {
+			m.imgIdx = i
 		}
-		if err := exec.Command(opener, path).Start(); err != nil {
-			return toastMsg{"open failed: " + err.Error()}
+	}
+	m.mode = modeImage
+	return m.fetch(photos[m.imgIdx])
+}
+
+// albumAt: the photos sent together with message i. Several photos in one
+// message, or photo-only messages sent back to back by the same person,
+// count as one album.
+func (m Model) albumAt(i int) []connector.Media {
+	start, end := i, i
+	if photoOnly(m.msgs[i]) {
+		for start > 0 && sameAlbum(m.msgs[start-1], m.msgs[start]) {
+			start--
 		}
-		return toastMsg{"opened in viewer"}
+		for end < len(m.msgs)-1 && sameAlbum(m.msgs[end], m.msgs[end+1]) {
+			end++
+		}
+	}
+	var out []connector.Media
+	for j := start; j <= end; j++ {
+		for _, md := range m.msgs[j].Media {
+			if md.Kind == connector.Photo && md.Ref != "" {
+				out = append(out, md)
+			}
+		}
+	}
+	return out
+}
+
+func photoOnly(msg store.MessageRow) bool {
+	if msg.Text != "" || len(msg.Media) == 0 {
+		return false
+	}
+	for _, md := range msg.Media {
+		if md.Kind != connector.Photo {
+			return false
+		}
+	}
+	return true
+}
+
+// sameAlbum: b continues a's album (same sender, both just photos, within a minute).
+func sameAlbum(a, b store.MessageRow) bool {
+	return photoOnly(a) && photoOnly(b) && a.SenderID == b.SenderID && b.Time.Sub(a.Time) < time.Minute
+}
+
+// previewAlbum opens photos in the system's viewer once all are loaded.
+func (m *Model) previewAlbum(photos []connector.Media) tea.Cmd {
+	var missing []tea.Cmd
+	var data [][]byte
+	for _, p := range photos {
+		if b := m.raw[p.Ref]; b != nil {
+			data = append(data, b)
+			continue
+		}
+		if m.failed[p.Ref] != "" {
+			continue // skip ones that can't load
+		}
+		if cmd := m.fetch(p); cmd != nil {
+			missing = append(missing, cmd)
+		}
+		if m.pending[p.Ref] {
+			missing = append(missing, nil)
+		}
+	}
+	if len(missing) > 0 { // wait; mediaMsg calls back here as each arrives
+		first := len(m.albumWait) == 0
+		m.albumWait = photos
+		if first {
+			missing = append(missing, m.flash(fmt.Sprintf("Opening %d photo(s)…", len(photos))))
+		}
+		return tea.Batch(missing...)
+	}
+	m.albumWait = nil
+	if len(data) == 0 {
+		return m.flash("couldn't load the photos")
+	}
+	return func() tea.Msg {
+		paths, err := tempAlbum(data)
+		if err == nil {
+			err = previewFiles(paths)
+		}
+		if err != nil {
+			return toastMsg{"couldn't open photos: " + err.Error()}
+		}
+		return nil
 	}
 }
 
@@ -1276,4 +1691,174 @@ func (m Model) messageAt(y int) int {
 		}
 	}
 	return -1
+}
+
+// ---- sound picker ----
+
+func (m *Model) openSoundPicker() {
+	m.soundNames = soundNames()
+	m.soundPick, m.soundCur = true, 0
+	for i, n := range m.soundNames {
+		if n == m.soundName {
+			m.soundCur = i
+		}
+	}
+	m.soundUndo = [3]string{m.soundName, fmt.Sprint(m.soundVol), fmt.Sprint(m.soundOn)}
+}
+
+func (m Model) onSoundKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	play := func() tea.Cmd {
+		name, vol := m.soundName, m.soundVol
+		return func() tea.Msg { playSound(name, vol); return nil }
+	}
+	switch k.String() {
+	case "up", "k":
+		if m.soundCur > 0 {
+			m.soundCur--
+			m.soundName = m.soundNames[m.soundCur]
+			return m, play()
+		}
+	case "down", "j":
+		if m.soundCur < len(m.soundNames)-1 {
+			m.soundCur++
+			m.soundName = m.soundNames[m.soundCur]
+			return m, play()
+		}
+	case "left", "h", "-":
+		m.soundVol = max(10, m.soundVol-10)
+		return m, play()
+	case "right", "l", "+", "=":
+		m.soundVol = min(200, m.soundVol+10)
+		return m, play()
+	case " ", "p":
+		return m, play()
+	case "x":
+		m.soundOn = !m.soundOn
+	case "enter":
+		m.soundPick = false
+		_ = m.st.SetSetting("sound_name", m.soundName)
+		_ = m.st.SetSetting("sound_volume", fmt.Sprint(m.soundVol))
+		_ = m.st.SetSetting(settingSound, map[bool]string{true: "on", false: "off"}[m.soundOn])
+		if !m.soundOn {
+			return m, m.flash("Saved. Sound is off.")
+		}
+		return m, m.flash(fmt.Sprintf("Saved: %s at %d%%", m.soundName, m.soundVol))
+	case "esc", "q":
+		m.soundPick = false
+		m.soundName = m.soundUndo[0]
+		m.soundVol = atoiOr(m.soundUndo[1], 100)
+		m.soundOn = m.soundUndo[2] == "true"
+	}
+	return m, nil
+}
+
+// ---- people search ----
+
+// rowCount: chats, then people (while searching).
+func (m Model) rowCount() int { return len(m.chats) + len(m.found) }
+
+func (m Model) personAt(i int) *store.Person {
+	if i >= len(m.chats) && i < m.rowCount() {
+		p := m.found[i-len(m.chats)]
+		return &p
+	}
+	return nil
+}
+
+// updatePeople lists people matching the search who aren't already shown
+// as a chat: your contacts first, then Messenger's results.
+func (m *Model) updatePeople() {
+	m.found = nil
+	q := strings.TrimSpace(m.query)
+	if q == "" {
+		m.remote = nil
+		return
+	}
+	shown := map[string]bool{m.conn.SelfID(): true}
+	for _, c := range m.chats {
+		shown[c.ID] = true
+	}
+	add := func(p store.Person) {
+		if !shown[p.ID] && p.Name != "" {
+			shown[p.ID] = true
+			m.found = append(m.found, p)
+		}
+	}
+	for _, p := range m.st.SearchContacts(q, 15) {
+		add(p)
+	}
+	for _, p := range m.remote {
+		add(p)
+	}
+}
+
+// openPerson opens your 1:1 chat with someone found in search.
+func (m *Model) openPerson(p store.Person) tea.Cmd {
+	chatID, err := m.conn.OpenDirect(m.ctx, p.ID)
+	if err != nil {
+		return m.flash("couldn't open chat: " + err.Error())
+	}
+	if err := m.st.EnsureChat(chatID, true); err != nil {
+		return m.flash(err.Error())
+	}
+	c, err := m.st.Chat(chatID)
+	if err != nil {
+		return m.flash(err.Error())
+	}
+	m.stopInput()
+	m.query, m.remote, m.found, m.personView = "", nil, nil, nil
+	return m.openChat(c)
+}
+
+func hasPhoto(msg store.MessageRow) bool {
+	for _, md := range msg.Media {
+		if md.Kind == connector.Photo && md.Ref != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// openLink opens a shared link in the browser.
+func openLink(url string) tea.Cmd {
+	return func() tea.Msg {
+		if err := openURL(url); err != nil {
+			return toastMsg{"couldn't open link: " + err.Error()}
+		}
+		return toastMsg{"Opened in your browser"}
+	}
+}
+
+// rowKey names the row at i ("c:<chat>" or "p:<person>"), so the highlight
+// can follow it when the list changes under it.
+func (m Model) rowKey(i int) string {
+	if p := m.personAt(i); p != nil {
+		return "p:" + p.ID
+	}
+	if i >= 0 && i < len(m.chats) {
+		return "c:" + m.chats[i].ID
+	}
+	return ""
+}
+
+func (m *Model) restoreCursor(key string) {
+	if key == "" {
+		return
+	}
+	for i := 0; i < m.rowCount(); i++ {
+		if m.rowKey(i) == key {
+			m.cursor = i
+			return
+		}
+	}
+}
+
+// firstFolder is where tuon opens: your first folder (Unread aside).
+func firstFolder(st *store.Store) store.Space {
+	for _, sp := range st.Spaces() {
+		if sp != store.Unread {
+			return sp
+		}
+	}
+	return store.Inbox
 }

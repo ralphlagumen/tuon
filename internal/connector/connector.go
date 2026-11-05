@@ -25,13 +25,18 @@ const (
 	Voice   MediaKind = "voice"
 	File    MediaKind = "file"
 	Sticker MediaKind = "sticker"
+	Link    MediaKind = "link" // a shared post or link card
 )
 
 type Media struct {
 	Kind MediaKind
 	// Ref is opaque to everything but the connector that made it
 	// (a URL for plain chats, encoded keys for encrypted ones).
-	Ref string
+	Ref string `json:",omitempty"`
+	// For links: what the card says and where it goes.
+	Title  string `json:",omitempty"`
+	Source string `json:",omitempty"`
+	URL    string `json:",omitempty"`
 }
 
 type Message struct {
@@ -46,6 +51,13 @@ type Message struct {
 	Pending bool
 	// ReplacesID: this confirmed message takes the place of that pending one.
 	ReplacesID string
+	// ReplyToID: the message this one replies to, if any.
+	ReplyToID string
+}
+
+// ReplyRef points at the message being replied to.
+type ReplyRef struct {
+	ID, SenderID string
 }
 
 // Mention is a person tagged in an outgoing message. The text must contain
@@ -53,6 +65,11 @@ type Message struct {
 type Mention struct {
 	UserID string
 	Name   string
+}
+
+// Person is someone found by a people search.
+type Person struct {
+	ID, Name string
 }
 
 // Attachment is a file to send.
@@ -81,6 +98,11 @@ type (
 	ParticipantEvent struct {
 		ChatID, UserID, Nickname string
 	}
+	// ChatAliasEvent says chat From is the same conversation as chat To
+	// (Messenger lists encrypted 1:1s under a thread number, while their
+	// messages arrive under the person's ID).
+	ChatAliasEvent struct{ From, To string }
+
 	// StatusEvent reports connection state. Err != nil means something broke.
 	StatusEvent struct {
 		Text string
@@ -95,7 +117,16 @@ type Connector interface {
 	SelfID() string
 	// LoadOlder asks for messages before the given one; they arrive as MessageEvents.
 	LoadOlder(ctx context.Context, chatID string, before time.Time, beforeID string) error
-	Send(ctx context.Context, chatID, text string, mentions []Mention) error
+	// Send sends text; reply is nil unless it answers a specific message.
+	Send(ctx context.Context, chatID, text string, mentions []Mention, reply *ReplyRef) error
+	// SearchPeople asks the platform who matches a name.
+	SearchPeople(ctx context.Context, query string) ([]Person, error)
+	// OpenDirect gets the 1:1 chat with a person ready to use (it may not be
+	// in the chat list yet). The chat ID it returns is what Send takes.
+	OpenDirect(ctx context.Context, userID string) (string, error)
+	// KnowChat tells the connector what tuon already knows about a chat
+	// (from earlier sessions), so sends take the right route.
+	KnowChat(chat Chat)
 	// SendFile sends one photo or file.
 	SendFile(ctx context.Context, chatID string, file Attachment) error
 	// React sets our reaction on a message; emoji "" removes it.

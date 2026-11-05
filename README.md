@@ -1,167 +1,196 @@
-# tuon
+<p align="center">
+  <img src="docs/img/logo.svg" width="112" alt="tuon logo: an amber pixel t">
+</p>
 
-*Tuon* is Tagalog for "focus".
+<h1 align="center">tuon</h1>
 
-A calm, chat-only Messenger client for the terminal. You get your chats, sorted into **Work**, **Personal** and **Inbox**. No feed, stories, ads or notifications pulling you back in.
+<p align="center">
+  Messenger in your terminal: your chats, sorted into folders, and nothing else.<br>
+  <em>Tuon</em> is Tagalog for "focus".
+</p>
 
-It's a personal tool. See [Before you use it](#before-you-use-it).
+<p align="center">
+  <img alt="Go 1.27" src="https://img.shields.io/badge/Go-1.27-00ADD8?logo=go&logoColor=white">
+  <img alt="macOS · Linux · Windows" src="https://img.shields.io/badge/runs_on-macOS_·_Linux_·_Windows-2a2f37">
+  <img alt="License: AGPL-3.0" src="https://img.shields.io/badge/license-AGPL--3.0-e5b25d">
+</p>
+
+<p align="center">
+  <img src="docs/img/screen-chat.svg" alt="tuon: the chat list on the left, a group chat on the right, with a reply being written">
+</p>
+
+Messenger's apps are heavy and built to keep you scrolling. Tuon keeps only the conversations: no feed, stories, ads or suggestions. It runs in a terminal window, uses about 39 MB of memory, and sorts your chats into folders like Work and Personal, so family and work stay apart.
+
+It's a personal tool that talks to Messenger the unofficial way. Read [Before you use it](#before-you-use-it) first.
+
+## What you get
+
+- **Folders** you name and order yourself. New chats land in Inbox until you file them, and an **Unread** tab gathers every unread chat in one place.
+- **Encrypted 1:1 and group chats**, sending and receiving, including replies, @mentions, reactions and files.
+- **Real photos** in Ghostty, kitty and WezTerm. Other terminals show a `View photo` button that opens the photo in your viewer, with several photos opening as a gallery.
+- **Keyboard first**, with the mouse working too: click a chat to open it, click a photo to view it, drag over messages to copy them.
+- **Quiet by default.** One soft sound for new messages, which you can change or turn off, and no "seen" receipts sent back.
+
+<p align="center">
+  <img src="docs/img/screen-unread.svg" alt="The Unread tab showing one unread chat across folders">
+</p>
 
 ## Install
 
-You need macOS, [Go](https://go.dev) and [Homebrew](https://brew.sh).
+**macOS** needs [Go](https://go.dev) and [Homebrew](https://brew.sh):
 
 ```sh
+git clone git@github.com:ralphlagumen/tuon.git
+cd tuon
 ./install.sh
 ```
 
-The script:
-- builds `tuon` and installs it to `~/.local/bin` (set `PREFIX` to change that)
-- installs [Ghostty](https://ghostty.org) if it's missing. Ghostty is the terminal that shows real photos.
+This builds `tuon` into `~/.local/bin`, installs [Ghostty](https://ghostty.org) (the terminal that shows real photos) if you don't have it, then runs `tuon setup`: you log in, and can enter your Messenger PIN to bring back older encrypted chats.
 
-## Run
+**Linux:** `./install.sh` works the same, minus Ghostty. For photos, use kitty, Ghostty or WezTerm. For copy and paste, install `wl-clipboard` (Wayland) or `xclip` (X11).
 
-```sh
-tuon
+**Windows:** build it, then run it in Windows Terminal:
+
+```powershell
+go build -o tuon.exe ./cmd/tuon
+.\tuon.exe
 ```
 
-Tuon runs right in the terminal you type it in. Use **Ghostty** for real photos. Other terminals, like Terminal.app, work too, but photos there are blocky.
+## Log in
 
-To make Ghostty's edges match Tuon, you can add these to `~/.config/ghostty/config`:
+`./install.sh` runs `tuon setup` for you (or run `tuon` the first time). It asks how you want to log in:
 
-```
-background = 1f2329
-window-padding-color = background
-copy-on-select = clipboard
-```
+| Option | What happens |
+|---|---|
+| **1. Browser window** (recommended) | A browser window opens at Facebook's login page; Messenger uses your Facebook account. Check the address bar shows `https://www.facebook.com`, then log in as usual, including 2-factor. Tuon picks up your session and closes the window. |
+| 2. Email and password | Typed into Tuon. This is the Messenger app's own login, and it asks for a 2-factor code if your account needs one. |
+| 3. Paste cookies | For when the other two don't work. |
 
-The last line copies text as soon as you select it with shift-drag.
+The browser window uses a separate, temporary profile, so your usual browser and its logins aren't touched. Tuon never stores your password, only the session Meta gives back, and keeps it in your system keychain.
 
-### First run: log in
+Encrypted chats start empty on a new device. Setup asks for your 6-digit Messenger PIN to load their older messages; you can skip it and run `tuon history` later, with Tuon closed.
 
-Tuon logs in as you, using the session cookies from your browser.
+When Messenger logs you out, Tuon asks you to log in again on its next start. `tuon logout` forgets your session on this computer, and `tuon logout --wipe` also deletes your chats, folders and encryption keys.
 
-1. Log in at [messenger.com](https://www.messenger.com).
-2. Open its cookies:
-   - Safari: Develop › Show Web Inspector › Storage › Cookies
-   - Chrome: DevTools › Application › Cookies
-3. When Tuon asks, paste one line:
+## Use it
 
-   ```
-   datr=…; c_user=…; xs=…
-   ```
+The chat list is on the left and the open chat on the right. Press `?` in Tuon for every key.
 
-The paste stays hidden. The line is saved to `~/.config/tuon/cookies.txt`, readable only by you. If Messenger logs you out later, run `tuon login` and paste a fresh line.
-
-## Using it
-
-Tuon has two panes: your chats on the left and the open chat on the right.
-
-### Chat list
+<details open>
+<summary><b>Chat list</b></summary>
 
 | Key | Does |
 |---|---|
 | `↑` `↓` | Browse chats. The right pane previews each one without marking it read. |
-| `←` `→` or `1`–`9` | Switch folders |
 | `enter` | Open the chat, ready to type |
+| `←` `→` or `1`–`9` | Switch folders |
+| `u` | Jump to Unread |
+| `/` | Search chats in every folder, and people. Pick a person and press `enter` to message them. |
 | `t` | Move the chat to a folder |
-| `f` | Edit folders: add, rename, delete, reorder |
-| `/` | Search chat names in every space |
-| `?` | Show all keys |
+| `f` | Add, rename, delete or reorder folders (`m` picks a folder up, `↑` `↓` moves it) |
 | `q` | Quit |
 
-### Inside a chat
+</details>
+
+<details open>
+<summary><b>Inside a chat</b></summary>
 
 | Key | Does |
 |---|---|
-| type, then `enter` | Send |
-| `@` | Tag someone. Pick with `↑` `↓`, confirm with `tab`. |
-| `@~/`… | Attach a file. Path completes as you type, `tab` picks. |
-| `ctrl+v` | Paste an image (or a file copied in Finder) from the clipboard |
-| drag a file in | Attaches it. `backspace` on an empty box removes the last file. |
+| `enter` | Send |
+| `alt+enter` or `ctrl+j` | New line (Terminal.app needs "Use Option as Meta key" for `option+enter`) |
+| `@` | Tag someone; `tab` picks |
+| `@~/` | Attach a file; the path completes as you type |
+| `ctrl+v` | Paste an image, or a file copied in Finder |
+| `ctrl+o` | Open the newest photo |
 | `↑` on an empty box | Step into the messages |
-| `r`, then `1`–`6` | React ❤ 😆 😮 😢 😠 👍. Same key again removes it. |
-| `y` | Copy the selected message |
-| `o` | View the photo full screen. `O` opens it in Preview, `s` saves it to Downloads. |
-| `esc` | Back to the chat list. Your draft is kept. |
+| `esc` | Back to the chat list, keeping your draft |
 
-The mouse also works: click a chat to open it, scroll either pane with the wheel, and drag over messages to copy them. Shift-drag selects any text the terminal's own way.
+With a message selected:
 
-Your message shows right away with "sending…", until Messenger confirms it.
-
-### Folders
-
-You start with **Work** and **Personal**. New chats land in **Inbox**. Press `t` once to move a chat to a folder, and it stays there. Press `f` to add, rename, delete or reorder folders. Deleting a folder moves its chats back to Inbox.
-
-### Sound
-
-A soft tick plays when a new message arrives. It doesn't play for muted chats or your own messages. `:sound off` turns it off.
-
-### Commands
-
-Type `:` in the chat list:
-- `:mute` mutes or unmutes the chat
-- `:images off` hides photo previews (`:images on` turns them back on)
-- `:sound off` turns off the new-message tick (`:sound on` brings it back)
-- `:quit` quits
-
-## Photos
-
-- **In Ghostty** (also kitty and WezTerm), photos show as real images: thumbnails in the chat, and full size with `o`.
-- **In other terminals**, a photo is a one-line `[Photo]` tag. `o` shows a pixelated version, and `O` opens the real file.
-
-To force one mode, set `TUON_IMAGES=kitty` or `TUON_IMAGES=blocks`.
-
-## Where things live
-
-| Path | What |
+| Key | Does |
 |---|---|
-| `~/.config/tuon/cookies.txt` | Your login (owner-only) |
-| `~/.config/tuon/tuon.db` | Chats, spaces, message cache, encryption keys |
-| `~/.config/tuon/tuon.log` | Warnings and errors. Set `TUON_DEBUG=1` for more. |
-| `~/.config/tuon/cache/img/` | Photo cache |
+| `enter` | Reply to it |
+| `r`, then `1`–`6` | React ❤ 😆 😮 😢 😠 👍 (the same key again removes it) |
+| `o` | Open its photo or link |
+| `y` | Copy it |
 
-To start fresh, delete `~/.config/tuon`. You'll need to log in again.
+</details>
+
+Attached files appear in your text as `[Image #1]` or `[File #2]`. Delete the token to drop the file. Your message shows right away as "sending…", and as "not sent" if Messenger hasn't confirmed it after 45 seconds.
+
+Type `:` in the chat list for commands: `:mute`, `:sound` (pick the new-message sound and volume), `:images off`, `:quit`.
+
+## Performance
+
+<img src="docs/img/memory.svg" alt="Memory while idle: tuon 39 MB, messenger.com in Chrome 1,539 MB">
+
+| Measure | tuon |
+|---|---|
+| Memory, idle after sync | 39 MB |
+| CPU, idle | 0.1% |
+| Redraws while idle | none |
+| Photos downloaded when opening a chat in Terminal.app | 0 (on click) |
+| Program size | 27 MB, one file |
+
+Measured on an M-series Mac on 2026-11-05, with the same account, after the first sync. The Chrome figure adds up every Chrome process for one messenger.com tab, left idle for 30 seconds.
+
+## How it works
+
+```mermaid
+flowchart LR
+    M[Messenger servers] <-->|web protocol and<br/>end-to-end encryption| C[connector]
+    C -->|events| U[terminal UI]
+    U <--> S[(local database)]
+    U -->|send, react| C
+```
+
+The **connector** speaks Messenger's protocol through [mautrix-meta](https://github.com/mautrix/meta), the library behind [Beeper](https://www.beeper.com), with whatsmeow handling encrypted chats. It turns everything into plain events: chats, messages, reactions, people. The **UI** saves those to a small SQLite database and draws from it. Other chat apps (Slack, Google Chat) can plug in as more connectors.
 
 ## Before you use it
 
-- **Meta's terms.** Messenger has no official API for personal accounts. Tuon works the way [Beeper](https://www.beeper.com) does: it uses [mautrix-meta](https://github.com/mautrix/meta) to talk to Messenger as your browser would. That breaks Meta's terms. Meta could ask you to verify your account or lock it. Use it on your own account, at your own risk.
-- **Encrypted chats.** Tuon registers itself as a linked device, so you may see a "new login" notice. Messages from 1:1 encrypted chats only arrive from that point on. Older history isn't loaded yet.
-- **License.** Tuon is AGPL-3.0, the same as mautrix-meta, which it's built on. If you share Tuon, or a changed version, with anyone, you must also offer them its source under the AGPL.
+- **Meta's terms.** Messenger has no official API for personal accounts, so Tuon uses the same unofficial route as Beeper. That breaks Meta's terms, and Meta could ask you to verify your account or lock it. Use it on your own account, at your own risk.
+- **Linked device.** For encrypted chats, Tuon registers as one of your devices, so you may get a "new login" notice. You can remove it in Messenger's security settings.
+- **Security.** [SECURITY.md](SECURITY.md) covers how Tuon protects your login and data, and what it can't protect.
 
 ## Known gaps
 
-- Your 1:1 chats only show up after a new message arrives in them. Messenger's web sync lists group chats only. The full 1:1 list and its history need your Messenger PIN to restore the encrypted backup, which isn't built yet.
-- Read state isn't sent back to Messenger, so your phone still shows read chats as unread. No "seen" receipts go out either.
-- Videos, voice messages and files show as a tag. Open them on your phone.
+- Older encrypted messages need your Messenger PIN: run `tuon history` once (with Tuon closed). Tuon uses the PIN to join Messenger's encrypted backup and doesn't keep it. Messenger allows only a few wrong tries.
+- Read state isn't sent back to Messenger, so your phone still shows chats you read in Tuon as unread.
+- Videos and voice messages show as tags. Open them on your phone.
+
+## Files
+
+| Where | What |
+|---|---|
+| System keychain, item "tuon" | Your session (or `~/.config/tuon/login.json`, owner-only, if there's no keychain) |
+| `~/.config/tuon/tuon.db` | Chats, folders, the newest 1,000 messages per chat, encryption keys |
+| `~/.config/tuon/tuon.log` | Warnings and errors; starts over past 5 MB |
+| `~/.config/tuon/cache/img/` | Photo cache; photos unused for 2 weeks are removed, capped at 100 MB |
+
+Everything in `~/.config/tuon` is readable only by you.
 
 ## Development
 
 ```sh
 go build -o bin/tuon ./cmd/tuon      # build
-go test ./...                        # tests (no network)
+go test ./...                        # tests, no network
 
-# Read-only check against your real account (never sends)
-TUON_LIVE=1 go test ./internal/ui -run TestLive -v
-
-# Render the UI and photos to PNG for review, into bin/preview
-TUON_PREVIEW=bin/preview go test ./internal/ui -run 'TestScreenshot|TestPreview'
+TUON_LIVE=1 go test ./internal/ui -run TestLive -v               # read-only check on your account
+TUON_DOCS=docs/img go test ./internal/ui -run TestDocsScreenshots # redraw the README screenshots
 ```
 
-Layout:
-
 ```
-cmd/tuon/                        app entry: login, Ghostty launch, wiring
-cmd/spike/                       first proof-of-concept CLI
-internal/connector/              what a chat platform must provide
-internal/connector/messenger/    Messenger via messagix (+ whatsmeow for E2EE)
-internal/store/                  SQLite: chats, spaces, messages, reactions
-internal/ui/                     Bubble Tea UI, images, styles
+cmd/tuon/                       entry: login, logout, startup
+internal/auth/                  saved login: keychain, browser login
+internal/connector/             what a chat platform must provide
+internal/connector/messenger/   Messenger through mautrix-meta and whatsmeow
+internal/store/                 SQLite: chats, folders, messages, reactions
+internal/ui/                    the terminal interface
 ```
 
-Slack and Google Chat are planned as more connectors, behind the same interface.
+See [CONTRIBUTING.md](CONTRIBUTING.md) to help out.
 
 ## License
 
-Copyright (C) 2026 Ralph Lagumen
-
-Tuon is free software under the [GNU Affero General Public License v3.0](LICENSE). It comes with no warranty.
+Copyright (C) 2026 Ralph Lagumen. Tuon is free software under the [GNU Affero General Public License v3.0](LICENSE), and comes with no warranty.

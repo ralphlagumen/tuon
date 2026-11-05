@@ -5,6 +5,7 @@ package store
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -24,6 +25,8 @@ const (
 	Work     Space = "Work" // starting folders
 	Personal Space = "Personal"
 	Inbox    Space = "inbox"
+	// Unread isn't a folder: it shows unread chats from every folder.
+	Unread Space = "\x00unread"
 )
 
 type Store struct {
@@ -43,6 +46,12 @@ type MessageRow struct {
 	SenderName string
 	Reactions  []ReactionCount
 	MyReaction string
+	ReplyTo    *Quote // what this message replies to, if it does
+}
+
+// Quote is the message a reply answers, shortened for display.
+type Quote struct {
+	Name, Text string
 }
 
 type ReactionCount struct {
@@ -100,6 +109,10 @@ CREATE TABLE IF NOT EXISTS tuon_spaces (
 	name TEXT PRIMARY KEY COLLATE NOCASE,
 	pos  INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS tuon_alias (
+	from_id TEXT PRIMARY KEY,
+	to_id   TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS tuon_settings (
 	k TEXT PRIMARY KEY,
 	v TEXT NOT NULL
@@ -129,6 +142,10 @@ func OpenPath(path string) (*Store, error) {
 	}
 	// columns added after the first release (ignore "duplicate column")
 	_, _ = db.Exec(`ALTER TABLE tuon_messages ADD COLUMN pending INTEGER NOT NULL DEFAULT 0`)
+	// read_ts: when you last read the chat in tuon. Messenger doesn't know
+	// (we send no "seen"), so its updates can't make older messages unread.
+	_, _ = db.Exec(`ALTER TABLE tuon_chats ADD COLUMN read_ts INTEGER NOT NULL DEFAULT 0`)
+	_, _ = db.Exec(`ALTER TABLE tuon_messages ADD COLUMN reply_to TEXT NOT NULL DEFAULT ''`)
 	// first run with folders: start with Work and Personal (and move chats
 	// tagged before folders existed)
 	var n int
@@ -154,7 +171,8 @@ VALUES (?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
 	name      = CASE WHEN excluded.name <> '' THEN excluded.name ELSE name END,
 	snippet   = CASE WHEN excluded.last_ts >= last_ts AND excluded.snippet <> '' THEN excluded.snippet ELSE snippet END,
-	unread    = CASE WHEN excluded.last_ts >= last_ts THEN excluded.unread ELSE unread END,
+	unread    = CASE WHEN excluded.last_ts >= last_ts
+	                 THEN (excluded.unread AND excluded.last_ts > read_ts) ELSE unread END,
 	last_ts   = MAX(last_ts, excluded.last_ts),
 	grp       = MAX(grp, excluded.grp),
 	encrypted = MAX(encrypted, excluded.encrypted)`,
@@ -181,9 +199,10 @@ func (s *Store) AddMessage(m connector.Message, chatOpen bool) (bool, error) {
 	}
 	var exists bool
 	_ = s.DB.QueryRow(`SELECT 1 FROM tuon_messages WHERE id = ?`, m.ID).Scan(&exists)
-	_, err := s.DB.Exec(`INSERT INTO tuon_messages (id, chat_id, sender_id, text, ts, from_me, media, pending)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET text = excluded.text, media = excluded.media, pending = excluded.pending`,
-		m.ID, m.ChatID, m.SenderID, m.Text, m.Time.UnixMilli(), b2i(m.FromMe), media, b2i(m.Pending))
+	_, err := s.DB.Exec(`INSERT INTO tuon_messages (id, chat_id, sender_id, text, ts, from_me, media, pending, reply_to)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET text = excluded.text, media = excluded.media,
+	pending = excluded.pending, reply_to = CASE WHEN excluded.reply_to <> '' THEN excluded.reply_to ELSE reply_to END`,
+		m.ID, m.ChatID, m.SenderID, m.Text, m.Time.UnixMilli(), b2i(m.FromMe), media, b2i(m.Pending), m.ReplyToID)
 	if err != nil {
 		return false, err
 	}
@@ -193,6 +212,9 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET text = excluded.te
 	snippet := m.Text
 	if snippet == "" && len(m.Media) > 0 {
 		snippet = "[" + string(m.Media[0].Kind) + "]"
+		if md := m.Media[0]; md.Kind == connector.Link && md.Title != "" {
+			snippet = "Shared: " + md.Title
+		}
 	}
 	switch {
 	case m.FromMe:
@@ -208,7 +230,8 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET text = excluded.te
 INSERT INTO tuon_chats (id, snippet, last_ts, unread) VALUES (?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
 	snippet = CASE WHEN excluded.last_ts >= last_ts THEN excluded.snippet ELSE snippet END,
-	unread  = CASE WHEN excluded.last_ts > last_ts THEN excluded.unread ELSE unread END,
+	unread  = CASE WHEN excluded.last_ts > last_ts
+	               THEN (excluded.unread AND excluded.last_ts > read_ts) ELSE unread END,
 	last_ts = MAX(last_ts, excluded.last_ts)`,
 		m.ChatID, strings.Join(strings.Fields(snippet), " "), m.Time.UnixMilli(), b2i(unread))
 	return !exists, err
@@ -242,9 +265,9 @@ func (s *Store) Chats(space Space, query string) ([]ChatRow, error) {
 	rows, err := s.DB.Query(`SELECT `+chatCols+`
 FROM tuon_chats c LEFT JOIN tuon_contacts ct ON ct.id = c.id
 WHERE c.last_ts > 0
-	AND (? <> '' OR c.space = ?)  -- searching looks in every space
+	AND (? <> '' OR c.space = ? OR (? AND c.unread = 1 AND c.muted = 0))  -- searching looks everywhere
 	AND (? = '' OR COALESCE(NULLIF(c.name, ''), ct.name, c.id) LIKE '%' || ? || '%')
-ORDER BY c.last_ts DESC`, query, string(space), query, query)
+ORDER BY c.last_ts DESC`, query, string(space), space == Unread, query, query)
 	if err != nil {
 		return nil, err
 	}
@@ -268,6 +291,7 @@ ORDER BY c.last_ts DESC`, query, string(space), query, query)
 }
 
 func (s *Store) Chat(id string) (ChatRow, error) {
+	id = s.Resolve(id)
 	r, err := scanChat(s.DB.QueryRow(`SELECT `+chatCols+`
 FROM tuon_chats c LEFT JOIN tuon_contacts ct ON ct.id = c.id WHERE c.id = ?`, id))
 	if err == nil {
@@ -339,7 +363,7 @@ func (s *Store) ToggleMute(chatID string) error {
 }
 
 func (s *Store) MarkRead(chatID string) error {
-	_, err := s.DB.Exec(`UPDATE tuon_chats SET unread = 0 WHERE id = ?`, chatID)
+	_, err := s.DB.Exec(`UPDATE tuon_chats SET unread = 0, read_ts = MAX(read_ts, last_ts) WHERE id = ?`, chatID)
 	return err
 }
 
@@ -398,7 +422,7 @@ ORDER BY name`, chatID, selfID)
 // with reactions. selfID marks which reaction is ours.
 func (s *Store) Messages(chatID string, limit int, selfID string) ([]MessageRow, error) {
 	rows, err := s.DB.Query(`SELECT * FROM (
-	SELECT m.id, m.chat_id, m.sender_id, m.text, m.ts, m.from_me, m.media, COALESCE(ct.name, ''), m.pending
+	SELECT m.id, m.chat_id, m.sender_id, m.text, m.ts, m.from_me, m.media, COALESCE(ct.name, ''), m.pending, m.reply_to
 	FROM tuon_messages m LEFT JOIN tuon_contacts ct ON ct.id = m.sender_id
 	WHERE m.chat_id = ? ORDER BY m.ts DESC LIMIT ?
 ) ORDER BY 5 ASC`, chatID, limit)
@@ -411,7 +435,7 @@ func (s *Store) Messages(chatID string, limit int, selfID string) ([]MessageRow,
 		var r MessageRow
 		var ts int64
 		var media string
-		if err := rows.Scan(&r.ID, &r.ChatID, &r.SenderID, &r.Text, &ts, &r.FromMe, &media, &r.SenderName, &r.Pending); err != nil {
+		if err := rows.Scan(&r.ID, &r.ChatID, &r.SenderID, &r.Text, &ts, &r.FromMe, &media, &r.SenderName, &r.Pending, &r.ReplyToID); err != nil {
 			return nil, err
 		}
 		r.Time = time.UnixMilli(ts)
@@ -423,6 +447,8 @@ func (s *Store) Messages(chatID string, limit int, selfID string) ([]MessageRow,
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	rows.Close()
+	s.attachReplies(out, selfID)
 	return out, s.attachReactions(chatID, selfID, out)
 }
 
@@ -452,6 +478,20 @@ FROM tuon_reactions WHERE chat_id = ? GROUP BY message_id, emoji ORDER BY 5`, se
 		}
 	}
 	return rows.Err()
+}
+
+// Prune keeps the newest keep messages per chat (older ones reload from
+// Messenger when you scroll up) and drops reactions left without a message.
+func (s *Store) Prune(keep int) error {
+	_, err := s.DB.Exec(`DELETE FROM tuon_messages WHERE id IN (
+	SELECT id FROM (
+		SELECT id, ROW_NUMBER() OVER (PARTITION BY chat_id ORDER BY ts DESC) AS n FROM tuon_messages
+	) WHERE n > ?)`, keep)
+	if err != nil {
+		return err
+	}
+	_, err = s.DB.Exec(`DELETE FROM tuon_reactions WHERE message_id NOT IN (SELECT id FROM tuon_messages)`)
+	return err
 }
 
 func (s *Store) Setting(k, def string) string {
@@ -493,8 +533,11 @@ func (s *Store) Spaces() []Space {
 
 // Label is how a space is shown.
 func Label(sp Space) string {
-	if sp == Inbox {
+	switch sp {
+	case Inbox:
 		return "Inbox"
+	case Unread:
+		return "Unread"
 	}
 	return string(sp)
 }
@@ -591,3 +634,150 @@ func (s *Store) SpaceCounts() map[Space]int {
 	}
 	return out
 }
+
+// SearchContacts finds people by name (not you).
+func (s *Store) SearchContacts(query string, limit int) []Person {
+	rows, err := s.DB.Query(`SELECT id, name FROM tuon_contacts
+WHERE id <> ? AND name LIKE '%' || ? || '%' ORDER BY name LIMIT ?`, s.Self, query, limit)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []Person
+	for rows.Next() {
+		var p Person
+		if rows.Scan(&p.ID, &p.Name) == nil {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// EnsureChat makes sure a chat row exists (for a 1:1 opened from search).
+func (s *Store) EnsureChat(id string, encrypted bool) error {
+	_, err := s.DB.Exec(`INSERT INTO tuon_chats (id, encrypted) VALUES (?, ?) ON CONFLICT(id) DO NOTHING`, id, b2i(encrypted))
+	return err
+}
+
+// attachReplies fills in who and what each reply answers.
+func (s *Store) attachReplies(msgs []MessageRow, selfID string) {
+	byID := map[string]MessageRow{}
+	for _, m := range msgs {
+		byID[m.ID] = m
+	}
+	for i := range msgs {
+		id := msgs[i].ReplyToID
+		if id == "" {
+			continue
+		}
+		parent, ok := byID[id]
+		if !ok { // older than what's loaded
+			var media string
+			var ts int64
+			err := s.DB.QueryRow(`SELECT m.sender_id, m.text, m.media, m.ts, COALESCE(ct.name, '')
+FROM tuon_messages m LEFT JOIN tuon_contacts ct ON ct.id = m.sender_id WHERE m.id = ?`, id).
+				Scan(&parent.SenderID, &parent.Text, &media, &ts, &parent.SenderName)
+			if err != nil {
+				msgs[i].ReplyTo = &Quote{Name: "", Text: "an earlier message"}
+				continue
+			}
+			if media != "" {
+				_ = json.Unmarshal([]byte(media), &parent.Media)
+			}
+		}
+		q := &Quote{Name: parent.SenderName, Text: parent.Text}
+		if parent.SenderID == selfID {
+			q.Name = "You"
+		} else if f := strings.Fields(q.Name); len(f) > 0 {
+			q.Name = f[0]
+		}
+		if q.Text == "" && len(parent.Media) > 0 {
+			q.Text = "[" + string(parent.Media[0].Kind) + "]"
+		}
+		msgs[i].ReplyTo = q
+	}
+}
+
+// Resolve maps a chat ID that was merged into another chat to that chat.
+func (s *Store) Resolve(id string) string {
+	var to string
+	if s.DB.QueryRow(`SELECT to_id FROM tuon_alias WHERE from_id = ?`, id).Scan(&to) == nil && to != "" {
+		return to
+	}
+	return id
+}
+
+// Merge folds chat from into chat to: Messenger lists an encrypted 1:1
+// under a thread number, but its messages arrive under the person's ID.
+// Messages, reactions and people move over; the folder, name and unread
+// state carry across, and from is remembered so later events land in to.
+func (s *Store) Merge(from, to string) error {
+	to = s.Resolve(to)
+	if from == "" || to == "" || from == to {
+		return nil
+	}
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	steps := []string{
+		`INSERT INTO tuon_alias (from_id, to_id) VALUES (?1, ?2) ON CONFLICT(from_id) DO UPDATE SET to_id = excluded.to_id`,
+		`UPDATE tuon_alias SET to_id = ?2 WHERE to_id = ?1`,
+		`INSERT INTO tuon_chats (id) VALUES (?2) ON CONFLICT(id) DO NOTHING`,
+		`UPDATE tuon_chats SET
+			name      = CASE WHEN name = '' THEN (SELECT name FROM tuon_chats WHERE id = ?1) ELSE name END,
+			snippet   = CASE WHEN (SELECT last_ts FROM tuon_chats WHERE id = ?1) > last_ts AND (SELECT snippet FROM tuon_chats WHERE id = ?1) <> ''
+			                 THEN (SELECT snippet FROM tuon_chats WHERE id = ?1) ELSE snippet END,
+			unread    = MAX(unread, (SELECT unread FROM tuon_chats WHERE id = ?1)),
+			last_ts   = MAX(last_ts, (SELECT last_ts FROM tuon_chats WHERE id = ?1)),
+			read_ts   = MAX(read_ts, (SELECT read_ts FROM tuon_chats WHERE id = ?1)),
+			muted     = MAX(muted, (SELECT muted FROM tuon_chats WHERE id = ?1)),
+			encrypted = MAX(encrypted, (SELECT encrypted FROM tuon_chats WHERE id = ?1)),
+			space     = CASE WHEN space = 'inbox' THEN (SELECT space FROM tuon_chats WHERE id = ?1) ELSE space END
+		WHERE id = ?2 AND EXISTS (SELECT 1 FROM tuon_chats WHERE id = ?1)`,
+		`UPDATE tuon_messages SET chat_id = ?2 WHERE chat_id = ?1`,
+		`UPDATE tuon_reactions SET chat_id = ?2 WHERE chat_id = ?1`,
+		`INSERT OR IGNORE INTO tuon_participants (chat_id, user_id, nickname) SELECT ?2, user_id, nickname FROM tuon_participants WHERE chat_id = ?1`,
+		`DELETE FROM tuon_participants WHERE chat_id = ?1`,
+		`DELETE FROM tuon_chats WHERE id = ?1`,
+	}
+	for _, q := range steps {
+		if _, err := tx.Exec(q, from, to); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// MergeOneToOne merges every encrypted 1:1 thread into the chat under the
+// other person's ID (where its messages arrive).
+func (s *Store) MergeOneToOne() error {
+	if s.Self == "" {
+		return nil
+	}
+	rows, err := s.DB.Query(`
+SELECT c.id, MIN(p.user_id) FROM tuon_chats c JOIN tuon_participants p ON p.chat_id = c.id AND p.user_id <> ?
+WHERE c.encrypted = 1 AND c.grp = 0
+GROUP BY c.id HAVING COUNT(*) = 1 AND MIN(p.user_id) <> c.id`, s.Self)
+	if err != nil {
+		return err
+	}
+	var pairs [][2]string
+	for rows.Next() {
+		var a, b string
+		if rows.Scan(&a, &b) == nil {
+			pairs = append(pairs, [2]string{a, b})
+		}
+	}
+	rows.Close()
+	for _, p := range pairs {
+		if err := s.Merge(p[0], p[1]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ErrRunning means another tuon already has the data folder open.
+var ErrRunning = errors.New("tuon is already running in another window; use that one, or quit it first")

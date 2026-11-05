@@ -7,6 +7,8 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/ralph/tuon/internal/connector"
 )
 
 // Palette: "lamplight at night". Tuon paints its own background so contrast
@@ -44,6 +46,9 @@ var (
 	sSelBand   = lipgloss.NewStyle().Background(lipgloss.Color(cSelBand))
 	sChip      = lipgloss.NewStyle().Foreground(lipgloss.Color(cMuted))
 )
+
+// sBadge: an unread count, dark on amber
+var sBadge = lipgloss.NewStyle().Foreground(lipgloss.Color(cInk)).Background(lipgloss.Color(cAccent)).Bold(true)
 
 const unreadDot = "●"
 
@@ -153,6 +158,7 @@ func firstName(s string) string {
 //   - Joiners (U+200D), skin tones, keycap marks and U+FE0E are dropped, so
 //     each emoji stands alone: a family shows as its people, 👍🏽 as 👍.
 func termSafe(s string) string {
+	s = connector.SafeText(s, true)
 	var b strings.Builder
 	b.Grow(len(s))
 	var prev rune

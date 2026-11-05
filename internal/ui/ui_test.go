@@ -3,8 +3,10 @@ package ui
 import (
 	"context"
 	"errors"
+	"fmt"
 	"image"
 	"image/color"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,14 +23,18 @@ import (
 type sent struct {
 	text     string
 	mentions []connector.Mention
+	reply    *connector.ReplyRef
 }
 
 type reacted struct{ chat, msg, sender, emoji string }
 
 type fakeConn struct {
-	files   []connector.Attachment
-	sent    []sent
-	reacted []reacted
+	known     []connector.Chat
+	directory []connector.Person // what SearchPeople finds
+	opened    []string
+	files     []connector.Attachment
+	sent      []sent
+	reacted   []reacted
 }
 
 func (f *fakeConn) Start(context.Context) error { return nil }
@@ -37,9 +43,23 @@ func (f *fakeConn) SelfID() string              { return "1" }
 func (f *fakeConn) LoadOlder(context.Context, string, time.Time, string) error {
 	return nil
 }
-func (f *fakeConn) Send(_ context.Context, _ string, text string, ms []connector.Mention) error {
-	f.sent = append(f.sent, sent{text, ms})
+func (f *fakeConn) Send(_ context.Context, _ string, text string, ms []connector.Mention, reply *connector.ReplyRef) error {
+	f.sent = append(f.sent, sent{text, ms, reply})
 	return nil
+}
+func (f *fakeConn) KnowChat(c connector.Chat) { f.known = append(f.known, c) }
+func (f *fakeConn) SearchPeople(_ context.Context, q string) ([]connector.Person, error) {
+	var out []connector.Person
+	for _, p := range f.directory {
+		if strings.Contains(strings.ToLower(p.Name), strings.ToLower(q)) {
+			out = append(out, p)
+		}
+	}
+	return out, nil
+}
+func (f *fakeConn) OpenDirect(_ context.Context, userID string) (string, error) {
+	f.opened = append(f.opened, userID)
+	return userID, nil
 }
 func (f *fakeConn) SendFile(_ context.Context, _ string, a connector.Attachment) error {
 	f.files = append(f.files, a)
@@ -149,7 +169,7 @@ func TestFlow(t *testing.T) {
 	if strings.Contains(s, "dup") {
 		t.Fatalf("duplicate rows or older snippet won:\n%s", s)
 	}
-	if !strings.Contains(s, "3 Inbox 1") {
+	if !strings.Contains(s, "Inbox  1 ") && !strings.Contains(s, "Inb…  1 ") {
 		t.Fatalf("tabs:\n%s", s)
 	}
 
@@ -176,7 +196,7 @@ func TestFlow(t *testing.T) {
 	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = run(next.(Model), cmd)
 	s = screen(m)
-	for _, want := range []string{"Dev Team", "pushed the fix", "thanks, ping me when green", "deploy done", "Photo", "in Work", "😆 2", "│"} {
+	for _, want := range []string{"Dev Team", "pushed the fix", "thanks, ping me when green", "deploy done", "View photo", "in Work", "😆 2", "│"} {
 		if !strings.Contains(s, want) {
 			t.Fatalf("chat view missing %q:\n%s", want, s)
 		}
@@ -204,10 +224,15 @@ func TestFlow(t *testing.T) {
 	}
 	next, _ = m.Update(mediaMsg{ref: "img1", raw: []byte{1}, img: img})
 	m = next.(Model)
-	// without real-photo support, a photo is a one-line tag (o opens it)
-	if s := screen(m); !strings.Contains(s, "Photo   press o to view") || strings.Contains(s, "▀") {
+	// without real-photo support, a photo is a clean tag (no blocky preview)
+	if s := screen(m); !strings.Contains(s, "▸ View photo") || strings.Contains(s, "▀") {
 		t.Fatalf("photo tag:\n%s", s)
 	}
+	m.blocks = true // :images blocks turns pixel previews on
+	if s := screen(m); !strings.Contains(s, "▀") {
+		t.Fatalf("pixel preview missing with blocks on:\n%s", s)
+	}
+	m.blocks = false
 	t.Logf("chat:\n%s", screen(m))
 
 	// React: ↑ from the empty box steps into the messages; pick 😆 (2).
@@ -263,13 +288,19 @@ func TestFlow(t *testing.T) {
 	}
 	m.compose.SetValue("")
 
-	// Image view from a selected photo message.
+	// o on a photo pops up the real photo in the system viewer
+	var previewed string
+	previewFiles = func(p []string) error { previewed = p[0]; return nil }
+	defer func() { previewFiles = openFilesOS }()
 	m = key(m, "up")
-	m = key(m, "o")
-	if m.mode != modeImage || !strings.Contains(screen(m), "1 / 1") {
-		t.Fatalf("image view:\n%s", screen(m))
+	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("o")})
+	m = run(next.(Model), cmd)
+	if previewed == "" || m.mode == modeImage {
+		t.Fatalf("o should open the viewer popup (got %q, mode %v)", previewed, m.mode)
 	}
-	m = key(m, "esc")
+	if b, _ := os.ReadFile(previewed); len(b) != 1 {
+		t.Fatalf("viewer got the wrong file contents: %v", b)
+	}
 	m = key(m, "esc")
 	m = key(m, "esc")
 	if m.focus != focusList {
@@ -335,22 +366,22 @@ func TestAttachAndSendFiles(t *testing.T) {
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = run(next.(Model), cmd)
 
-	// a file path completes after "@~/" style paths
+	// a file path completes after "@~/" style paths; the file becomes a token
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "photo.jpg"), []byte("\xff\xd8\xff fake jpeg"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	m = typeText(m, "@"+dir+"/ph")
+	m = typeText(m, "look @"+dir+"/ph")
 	if len(m.sugg) != 1 || !strings.HasSuffix(m.sugg[0].Label, "photo.jpg") {
 		t.Fatalf("path suggestions = %+v", m.sugg)
 	}
 	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyTab})
 	m = run(next.(Model), cmd)
-	if len(m.atts) != 1 || m.atts[0].Name != "photo.jpg" || m.compose.Value() != "" {
-		t.Fatalf("attach: atts=%d draft=%q", len(m.atts), m.compose.Value())
+	if got := m.compose.Value(); got != "look [Image #1] " {
+		t.Fatalf("draft = %q", got)
 	}
-	if s := screen(m); !strings.Contains(s, "photo.jpg") {
-		t.Fatalf("chip missing:\n%s", s)
+	if s := screen(m); !strings.Contains(s, "[Image #1] photo.jpg") {
+		t.Fatalf("token legend missing:\n%s", s)
 	}
 
 	// drag and drop: a pasted path with an escaped space attaches too
@@ -358,27 +389,33 @@ func TestAttachAndSendFiles(t *testing.T) {
 	_ = os.WriteFile(spaced, []byte("hello"), 0o600)
 	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(strings.ReplaceAll(spaced, " ", "\\ ")), Paste: true})
 	m = run(next.(Model), cmd)
-	if len(m.atts) != 2 || m.atts[1].Name != "my notes.txt" {
-		t.Fatalf("drop: %+v", m.atts)
+	if got := m.compose.Value(); got != "look [Image #1] [File #2] " {
+		t.Fatalf("draft after drop = %q", got)
 	}
-	// backspace on an empty box removes the last chip
-	m = key(m, "x")
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	// backspace right after a token removes the whole token (and its file)
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyBackspace}) // the space
 	m = next.(Model)
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyBackspace}) // [File #2]
 	m = next.(Model)
-	if len(m.atts) != 1 {
-		t.Fatalf("backspace should remove one chip, have %d", len(m.atts))
+	if got := m.compose.Value(); got != "look [Image #1] " {
+		t.Fatalf("backspace should drop the token, draft = %q", got)
 	}
 
-	m = typeText(m, "see attached")
+	// a new line with alt+enter, then send
+	m = typeText(m, "see")
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
+	m = next.(Model)
+	m = typeText(m, "attached")
+	if m.compose.Height() != 2 {
+		t.Fatalf("box should grow to 2 lines, is %d", m.compose.Height())
+	}
 	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = run(next.(Model), cmd)
-	if len(fc.files) != 1 || fc.files[0].Name != "photo.jpg" || len(fc.sent) != 1 || fc.sent[0].text != "see attached" {
+	if len(fc.files) != 1 || fc.files[0].Name != "photo.jpg" || len(fc.sent) != 1 || fc.sent[0].text != "look see\nattached" {
 		t.Fatalf("files=%d sent=%+v", len(fc.files), fc.sent)
 	}
-	if len(m.atts) != 0 {
-		t.Fatal("chips should clear after sending")
+	if len(m.atts) != 0 || m.compose.Value() != "" {
+		t.Fatal("draft should clear after sending")
 	}
 }
 
@@ -417,7 +454,7 @@ func TestNoStrayLineBreaks(t *testing.T) {
 }
 
 func TestFolderManager(t *testing.T) {
-	m, st, _ := newTestModel(t, 100, 26)
+	m, st, _ := newTestModel(t, 170, 26) // wide enough for every tab name
 	m = seed(m)
 	m = key(m, "f")
 	if s := screen(m); !strings.Contains(s, "Folders") || !strings.Contains(s, "(built in)") {
@@ -426,18 +463,37 @@ func TestFolderManager(t *testing.T) {
 	m = key(m, "a")
 	m = typeText(m, "Family")
 	m = key(m, "enter")
-	if s := screen(m); !strings.Contains(s, "3 Family") {
-		t.Fatalf("new folder tab missing:\n%s", s)
+	if sp := st.Spaces(); len(sp) != 4 || sp[2] != "Family" {
+		t.Fatalf("new folder missing: %v", sp)
 	}
-	m = key(m, "K") // move Family before Personal
-	if s := screen(m); !strings.Contains(s, "2 Family") {
-		t.Fatalf("reorder:\n%s", s)
+	// move mode works with plain keys (Terminal.app eats shift+arrows)
+	m = key(m, "m")
+	m = key(m, "up")
+	m = key(m, "up") // Family (3rd) moves up twice, to first
+	m = key(m, "enter")
+	if sp := st.Spaces(); sp[0] != "Family" {
+		t.Fatalf("move mode: %v", sp)
+	}
+	m = key(m, "m")
+	m = key(m, "down")
+	m = key(m, "down") // can't pass Inbox
+	m = key(m, "down")
+	m = key(m, "enter")
+	if sp := st.Spaces(); sp[len(sp)-1] != store.Inbox || sp[2] != "Family" {
+		t.Fatalf("Inbox must stay last: %v", sp)
+	}
+	m = key(m, "m")
+	m = key(m, "up")
+	m = key(m, "enter")
+	m = key(m, "K") // shortcut still works too
+	if sp := st.Spaces(); sp[0] != "Family" {
+		t.Fatalf("reorder: %v", sp)
 	}
 	m = key(m, "r")
 	m.input.SetValue("")
 	m = typeText(m, "Fam")
 	m = key(m, "enter")
-	if sp := st.Spaces(); sp[1] != "Fam" {
+	if sp := st.Spaces(); sp[0] != "Fam" {
 		t.Fatalf("rename: %v", sp)
 	}
 	m = key(m, "d")
@@ -456,5 +512,411 @@ func TestFolderManager(t *testing.T) {
 	m = key(m, "2")
 	if c, _ := st.Chat(moved); c.Space != "Personal" {
 		t.Fatal("chat should have moved to Personal")
+	}
+}
+
+func TestSoundPicker(t *testing.T) {
+	var played []string
+	playSound = func(name string, vol int) { played = append(played, fmt.Sprintf("%s@%d", name, vol)) }
+	defer func() { playSound = playSoundOS }()
+
+	m, st, _ := newTestModel(t, 100, 30)
+	if m.soundVol != 100 {
+		t.Fatalf("default volume = %d, want 100", m.soundVol)
+	}
+	m = key(m, ":")
+	m = typeText(m, "sound")
+	m = key(m, "enter")
+	if !m.soundPick || !strings.Contains(screen(m), "New message sound") {
+		t.Fatalf("picker not open:\n%s", screen(m))
+	}
+	press := func(k tea.KeyMsg) {
+		next, cmd := m.Update(k)
+		m = next.(Model)
+		if cmd != nil {
+			cmd()
+		}
+	}
+	press(tea.KeyMsg{Type: tea.KeyDown})
+	press(tea.KeyMsg{Type: tea.KeyRight})
+	press(tea.KeyMsg{Type: tea.KeyRight})
+	if m.soundVol != 120 || len(played) < 2 {
+		t.Fatalf("vol=%d played=%v", m.soundVol, played)
+	}
+	chosen := m.soundName
+	press(tea.KeyMsg{Type: tea.KeyEnter})
+	if st.Setting("sound_volume", "") != "120" || st.Setting("sound_name", "") != chosen {
+		t.Fatalf("not saved: %s %s", st.Setting("sound_volume", ""), st.Setting("sound_name", ""))
+	}
+	// esc throws changes away
+	m = key(m, ":")
+	m = typeText(m, "sound")
+	m = key(m, "enter")
+	press(tea.KeyMsg{Type: tea.KeyLeft})
+	m = key(m, "esc")
+	if m.soundVol != 120 || m.soundName != chosen {
+		t.Fatalf("esc should restore: %s@%d", m.soundName, m.soundVol)
+	}
+}
+
+func TestOpenPhotoWithoutSelecting(t *testing.T) {
+	var opened []string
+	previewFiles = func(p []string) error { opened = append(opened, p...); return nil }
+	defer func() { previewFiles = openFilesOS }()
+
+	m, _, _ := newTestModel(t, 100, 26)
+	m = seed(m)
+	m = key(m, "3")
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = run(next.(Model), cmd)
+	next, _ = m.Update(mediaMsg{ref: "img1", raw: []byte{1, 2}, img: image.NewRGBA(image.Rect(0, 0, 4, 4))})
+	m = next.(Model)
+
+	// ctrl+o while typing opens the newest photo
+	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyCtrlO})
+	m = run(next.(Model), cmd)
+	if len(opened) != 1 {
+		t.Fatalf("ctrl+o should open the newest photo, opened %v", opened)
+	}
+
+	// clicking the "View photo" line opens it too
+	y := -1
+	for i, l := range strings.Split(screen(m), "\n") {
+		if strings.Contains(l, "View photo") {
+			y = i
+		}
+	}
+	if y < 0 {
+		t.Fatalf("no View photo line:\n%s", screen(m))
+	}
+	x := m.leftWidth() + 20
+	for _, a := range []tea.MouseAction{tea.MouseActionPress, tea.MouseActionRelease} {
+		next, cmd = m.Update(tea.MouseMsg{X: x, Y: y, Action: a, Button: tea.MouseButtonLeft})
+		m = run(next.(Model), cmd)
+	}
+	if len(opened) != 2 {
+		t.Fatalf("click should open the photo, opened %v", opened)
+	}
+
+	// clicking a plain text message selects it instead
+	for i, l := range strings.Split(screen(m), "\n") {
+		if strings.Contains(l, "thanks, ping me") {
+			y = i
+		}
+	}
+	for _, a := range []tea.MouseAction{tea.MouseActionPress, tea.MouseActionRelease} {
+		next, cmd = m.Update(tea.MouseMsg{X: x, Y: y, Action: a, Button: tea.MouseButtonLeft})
+		m = run(next.(Model), cmd)
+	}
+	if !m.selecting || m.msgs[m.selIndex()].ID != "m2" {
+		t.Fatalf("click on text should select it (selecting=%v)", m.selecting)
+	}
+}
+
+func TestPhotoAlbum(t *testing.T) {
+	var opened [][]string
+	previewFiles = func(p []string) error { opened = append(opened, p); return nil }
+	defer func() { previewFiles = openFilesOS }()
+
+	m, _, _ := newTestModel(t, 100, 26)
+	now := time.Now()
+	evts := []any{
+		connector.ContactEvent{ID: "300", Name: "Ann Lim"},
+		connector.ChatEvent{Chat: connector.Chat{ID: "50", Name: "Market", Group: true, LastActivity: now}},
+		connector.MessageEvent{Message: connector.Message{ID: "t", ChatID: "50", SenderID: "300", Text: "new stock!", Time: now.Add(-3 * time.Minute)}},
+	}
+	// 3 photos sent back to back, then one more much later
+	for i, ref := range []string{"p1", "p2", "p3"} {
+		evts = append(evts, connector.MessageEvent{Message: connector.Message{ID: ref, ChatID: "50", SenderID: "300",
+			Time: now.Add(-2*time.Minute + time.Duration(i)*time.Second), Media: []connector.Media{{Kind: connector.Photo, Ref: ref}}}})
+	}
+	evts = append(evts, connector.MessageEvent{Message: connector.Message{ID: "p4", ChatID: "50", SenderID: "300",
+		Time: now, Media: []connector.Media{{Kind: connector.Photo, Ref: "p4"}}}})
+	next, _ := m.Update(EventsMsg(evts))
+	m = next.(Model)
+	m = key(m, "3")
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = run(next.(Model), cmd)
+
+	s := screen(m)
+	if strings.Count(s, "View 3 photos") != 1 || strings.Count(s, "▸ View photo") != 1 {
+		t.Fatalf("want one album line and one single photo:\n%s", s)
+	}
+	for _, ref := range []string{"p1", "p2", "p3", "p4"} {
+		next, _ = m.Update(mediaMsg{ref: ref, raw: []byte(ref), img: image.NewRGBA(image.Rect(0, 0, 2, 2))})
+		m = next.(Model)
+	}
+
+	// click the album: all three open together, in order
+	y := -1
+	for i, l := range strings.Split(screen(m), "\n") {
+		if strings.Contains(l, "View 3 photos") {
+			y = i
+		}
+	}
+	for _, a := range []tea.MouseAction{tea.MouseActionPress, tea.MouseActionRelease} {
+		next, cmd = m.Update(tea.MouseMsg{X: m.leftWidth() + 20, Y: y, Action: a, Button: tea.MouseButtonLeft})
+		m = run(next.(Model), cmd)
+	}
+	if len(opened) != 1 || len(opened[0]) != 3 {
+		t.Fatalf("album should open 3 photos at once: %v", opened)
+	}
+	for i, want := range []string{"p1", "p2", "p3"} {
+		if b, _ := os.ReadFile(opened[0][i]); string(b) != want {
+			t.Fatalf("photo %d = %q, want %q", i+1, b, want)
+		}
+	}
+
+	// in a terminal that draws photos, the full view flips through the album only
+	m.kitty = newKittyImages(io.Discard, t.TempDir())
+	m.focus, m.selecting = focusChat, true
+	m.selectIndex(1) // p1
+	m = key(m, "o")
+	if m.mode != modeImage || !strings.Contains(screen(m), "1 / 3") {
+		t.Fatalf("gallery view:\n%s", screen(m))
+	}
+	m = key(m, "right")
+	m = key(m, "right")
+	m = key(m, "right") // stops at the album's end
+	if !strings.Contains(screen(m), "3 / 3") {
+		t.Fatalf("gallery should stay within the album:\n%s", screen(m))
+	}
+}
+
+func TestPeopleSearch(t *testing.T) {
+	m, st, fc := newTestModel(t, 100, 30)
+	fc.directory = []connector.Person{{ID: "900", Name: "Markus Tan"}, {ID: "100", Name: "Mark Reyes"}}
+	m = seed(m)
+	m = key(m, "/")
+	var cmd tea.Cmd
+	for _, r := range "mark" {
+		var next tea.Model
+		next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m = next.(Model)
+	}
+	// your contact shows straight away (no chat with Mark yet)
+	if s := screen(m); !strings.Contains(s, "@ Mark Reyes") || !strings.Contains(s, "Person · enter to message") {
+		t.Fatalf("contact not listed:\n%s", s)
+	}
+	m = run(m, cmd) // the search pause, then Messenger's results
+	s := screen(m)
+	if !strings.Contains(s, "@ Markus Tan") || strings.Count(s, "@ Mark Reyes") != 1 {
+		t.Fatalf("Messenger results missing or duplicated:\n%s", s)
+	}
+
+	// move onto Markus (arrows work inside the search box) and open his chat
+	for i := 0; i < 10 && (m.personAt(m.cursor) == nil || m.personAt(m.cursor).Name != "Markus Tan"); i++ {
+		m = key(m, "down")
+	}
+	if !strings.Contains(screen(m), "Press enter to message Markus Tan") {
+		t.Fatalf("hint missing:\n%s", screen(m))
+	}
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = run(next.(Model), cmd)
+	if len(fc.opened) != 1 || fc.opened[0] != "900" || m.chat == nil || m.chat.ID != "900" || !m.composing() {
+		t.Fatalf("should open a 1:1 with Markus ready to type (opened %v)", fc.opened)
+	}
+	if m.chat.Display != "Markus Tan" || m.query != "" {
+		t.Fatalf("chat = %q, query = %q", m.chat.Display, m.query)
+	}
+	m = typeText(m, "hey")
+	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	_ = run(next.(Model), cmd)
+	if len(fc.sent) != 1 || fc.sent[0].text != "hey" {
+		t.Fatalf("sent = %+v", fc.sent)
+	}
+	if c, _ := st.Chat("900"); !c.Encrypted {
+		t.Fatal("a 1:1 opened from search is an encrypted chat")
+	}
+}
+
+func TestSharedLinkCard(t *testing.T) {
+	var opened string
+	openURL = func(u string) error { opened = u; return nil }
+	defer func() { openURL = openFile }()
+
+	m, _, _ := newTestModel(t, 100, 26)
+	now := time.Now()
+	next, _ := m.Update(EventsMsg{
+		connector.ContactEvent{ID: "400", Name: "Sherwin Cruz"},
+		connector.ChatEvent{Chat: connector.Chat{ID: "70", Name: "Oplan Budulan", Group: true, LastActivity: now}},
+		connector.MessageEvent{Message: connector.Message{ID: "x1", ChatID: "70", SenderID: "400", Time: now,
+			Media: []connector.Media{{Kind: connector.Link, Title: "YOUR FAVORITE TOYS ARE ON SALE! 🎁🧸", Source: "Facebook", URL: "https://www.facebook.com/p/1"}}}},
+	})
+	m = next.(Model)
+	m = key(m, "3")
+	if s := screen(m); !strings.Contains(s, "Shared: YOUR FA") {
+		t.Fatalf("list snippet:\n%s", s)
+	}
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = run(next.(Model), cmd)
+	s := screen(m)
+	if !strings.Contains(s, "▸ YOUR FAVORITE TOYS ARE ON SALE!") || !strings.Contains(s, "Facebook · click to open") {
+		t.Fatalf("link card missing:\n%s", s)
+	}
+	y := -1
+	for i, l := range strings.Split(s, "\n") {
+		if strings.Contains(l, "FAVORITE TOYS") && strings.Contains(l, "▸") {
+			y = i
+		}
+	}
+	for _, a := range []tea.MouseAction{tea.MouseActionPress, tea.MouseActionRelease} {
+		next, cmd = m.Update(tea.MouseMsg{X: m.leftWidth() + 20, Y: y, Action: a, Button: tea.MouseButtonLeft})
+		m = run(next.(Model), cmd)
+	}
+	if opened != "https://www.facebook.com/p/1" {
+		t.Fatalf("click should open the link, opened %q", opened)
+	}
+}
+
+func TestHostileTextIsDefused(t *testing.T) {
+	m, _, _ := newTestModel(t, 100, 26)
+	now := time.Now()
+	evil := "hi \x1b]52;c;ZXZpbA==\x07\x1b[2J\x1b]0;pwned\x07 ‮gpj.exe"
+	next, _ := m.Update(EventsMsg{
+		connector.ContactEvent{ID: "666", Name: "Mallory\x1b[31m"},
+		connector.ChatEvent{Chat: connector.Chat{ID: "66", Name: "Trap\x1b]0;x\x07", Snippet: evil, LastActivity: now}},
+		connector.MessageEvent{Message: connector.Message{ID: "e1", ChatID: "66", SenderID: "666", Text: evil, Time: now}},
+		connector.ReactionEvent{ChatID: "66", MessageID: "e1", ActorID: "666", Emoji: "\x1b[2J"},
+		connector.StatusEvent{Text: "x", Err: errors.New("bad\x1b]52;c;AAAA\x07")},
+	})
+	m = next.(Model)
+	m = key(m, "3")
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = run(next.(Model), cmd)
+	v := m.View()
+	for _, bad := range []string{"\x1b]52", "\x1b]0;", "\x1b[2J", "\x1b[31m", "‮", "\x07"} {
+		if strings.Contains(v, bad) {
+			t.Fatalf("screen still carries %q", bad)
+		}
+	}
+}
+
+func TestSearchKeepsYourPick(t *testing.T) {
+	m, _, fc := newTestModel(t, 100, 30)
+	// Messenger's results arrive later and include people sorted before Mark
+	fc.directory = []connector.Person{{ID: "901", Name: "Ann Markson"}, {ID: "902", Name: "Bea Marks"}}
+	m = seed(m)
+	m = key(m, "/")
+	var cmd tea.Cmd
+	for _, r := range "mark" {
+		var next tea.Model
+		next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m = next.(Model)
+	}
+	// pick Mark Reyes (a contact, shown right away) while still in the box
+	for i := 0; i < 10 && m.rowKey(m.cursor) != "p:100"; i++ {
+		m = key(m, "down")
+	}
+	m = run(m, cmd) // now Messenger's results land
+	if got := m.rowKey(m.cursor); got != "p:100" {
+		t.Fatalf("highlight jumped to %s", got)
+	}
+	// enter in the search box opens it straight away
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = run(next.(Model), cmd)
+	if m.chat == nil || m.chat.ID != "100" || !m.composing() {
+		t.Fatalf("enter should open Mark's chat ready to type, got %+v", m.chat)
+	}
+}
+
+func TestUnreadFolder(t *testing.T) {
+	m, st, _ := newTestModel(t, 170, 26)
+	m = seed(m) // Dev Team is unread
+	_ = st.SetSpace("10", store.Work)
+	m.reloadChats()
+	if s := screen(m); !strings.Contains(s, "Unread  1 ") || !strings.Contains(s, "Work  1 ") {
+		t.Fatalf("unread tab/badge missing:\n%s", s)
+	}
+	m = key(m, "2") // Personal: empty, but Unread still collects it
+	m = key(m, "u")
+	if s := screen(m); !strings.Contains(s, "Dev Team") {
+		t.Fatalf("Unread should list unread chats from every folder:\n%s", s)
+	}
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = run(next.(Model), cmd)
+	m = key(m, "esc")
+	if s := screen(m); !strings.Contains(s, "All caught up.") {
+		t.Fatalf("after reading, Unread should say all caught up:\n%s", s)
+	}
+	m = key(m, "1")
+	if s := screen(m); strings.Contains(s, "Unread") {
+		t.Fatalf("the Unread tab should hide once nothing is unread:\n%s", s)
+	}
+}
+
+func TestReplies(t *testing.T) {
+	m, _, fc := newTestModel(t, 110, 30)
+	m = seed(m)
+	m = key(m, "3")
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = run(next.(Model), cmd)
+
+	// pick "pushed the fix" (Mark) and press enter to reply
+	m = key(m, "up")
+	m = key(m, "up")
+	m = key(m, "up")
+	m = key(m, "enter")
+	if !m.composing() || m.replyTo == nil || m.replyTo.ID != "m1" {
+		t.Fatalf("enter on a message should start a reply (replyTo=%+v)", m.replyTo)
+	}
+	if s := screen(m); !strings.Contains(s, "↩ Replying to Mark: pushed the fix") {
+		t.Fatalf("reply banner missing:\n%s", s)
+	}
+	m = typeText(m, "nice")
+	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = run(next.(Model), cmd)
+	if len(fc.sent) != 1 || fc.sent[0].reply == nil || fc.sent[0].reply.ID != "m1" || fc.sent[0].reply.SenderID != "100" {
+		t.Fatalf("reply not sent: %+v", fc.sent)
+	}
+	if m.replyTo != nil {
+		t.Fatal("reply should clear after sending")
+	}
+
+	// esc cancels a reply without leaving the chat
+	m = key(m, "up")
+	m = key(m, "enter")
+	m = key(m, "esc")
+	if m.replyTo != nil || !m.composing() {
+		t.Fatal("esc should cancel the reply and keep you typing")
+	}
+
+	// a reply that arrives shows what it answers
+	next, _ = m.Update(EventsMsg{connector.MessageEvent{Message: connector.Message{
+		ID: "m9", ChatID: "10", SenderID: "200", Text: "agreed", Time: time.Now(), ReplyToID: "m1"}}})
+	m = next.(Model)
+	if s := screen(m); !strings.Contains(s, "↩ Mark: pushed the fix") || !strings.Contains(s, "agreed") {
+		t.Fatalf("incoming reply should quote its message:\n%s", s)
+	}
+}
+
+func TestOpensOnFirstFolder(t *testing.T) {
+	_, st, _ := newTestModel(t, 120, 30)
+	if got := firstFolder(st); got != store.Work {
+		t.Fatalf("first = %q, want Work", got)
+	}
+	_ = st.MoveSpace(store.Personal, -1) // Personal now first
+	if got := firstFolder(st); got != store.Personal {
+		t.Fatalf("after reorder first = %q, want Personal", got)
+	}
+}
+
+func TestInboxCantBeDeleted(t *testing.T) {
+	m, st, _ := newTestModel(t, 120, 30)
+	m = key(m, "f")
+	for i := 0; i < 10; i++ {
+		m = key(m, "down") // Inbox is last
+	}
+	if !strings.Contains(m.View(), "Inbox is built in") {
+		t.Fatal("footer should say Inbox is built in")
+	}
+	m = key(m, "d")
+	m = key(m, "y")
+	found := false
+	for _, sp := range st.Spaces() {
+		found = found || sp == store.Inbox
+	}
+	if !found || st.DeleteSpace(store.Inbox) == nil {
+		t.Fatal("Inbox must not be deletable")
 	}
 }

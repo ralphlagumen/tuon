@@ -18,6 +18,7 @@ import (
 	"image/png"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -29,6 +30,7 @@ import (
 	"go.mau.fi/mautrix-meta/pkg/messagix/cookies"
 	"go.mau.fi/mautrix-meta/pkg/messagix/httpclient"
 	"go.mau.fi/mautrix-meta/pkg/messagix/methods"
+	"go.mau.fi/mautrix-meta/pkg/messagix/securehistory"
 	"go.mau.fi/mautrix-meta/pkg/messagix/socket"
 	"go.mau.fi/mautrix-meta/pkg/messagix/table"
 	"go.mau.fi/mautrix-meta/pkg/messagix/types"
@@ -37,12 +39,14 @@ import (
 	"go.mau.fi/whatsmeow/proto/waConsumerApplication"
 	"go.mau.fi/whatsmeow/proto/waMediaTransport"
 	"go.mau.fi/whatsmeow/proto/waMsgApplication"
+	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	waTypes "go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/ralph/tuon/internal/auth"
 	"github.com/ralph/tuon/internal/connector"
 )
 
@@ -52,9 +56,9 @@ const (
 )
 
 type Conn struct {
-	cookieStr string
-	db        *sql.DB
-	log       zerolog.Logger
+	creds auth.Creds
+	db    *sql.DB
+	log   zerolog.Logger
 
 	cli    *messagix.Client
 	wa     *whatsmeow.Client
@@ -65,6 +69,9 @@ type Conn struct {
 	threadType map[int64]table.ThreadType
 	names      map[string]string // user ID -> name, to show encrypted @mentions
 
+	wadev *store.Device         // encrypted-chat identity
+	hdev  *securehistory.Device // backup device, once the PIN restore ran
+
 	e2eeOnce  sync.Once
 	fetchOnce sync.Once
 	ctx       context.Context
@@ -73,11 +80,11 @@ type Conn struct {
 
 var _ connector.Connector = (*Conn)(nil)
 
-// New makes a Messenger connector. cookieStr is "datr=..; c_user=..; xs=..".
+// New makes a Messenger connector from a saved login.
 // db holds the encrypted-chat keys (shared with Tuon's own store).
-func New(cookieStr string, db *sql.DB, log zerolog.Logger) *Conn {
+func New(creds auth.Creds, db *sql.DB, log zerolog.Logger) *Conn {
 	return &Conn{
-		cookieStr:  cookieStr,
+		creds:      creds,
 		db:         db,
 		log:        log,
 		events:     make(chan any, 1024),
@@ -97,13 +104,27 @@ func (c *Conn) emit(evt any) {
 }
 
 func (c *Conn) status(text string, err error) {
+	if err != nil { // error text can carry server-provided strings
+		err = errors.New(connector.SafeText(err.Error(), false))
+	}
 	c.emit(connector.StatusEvent{Text: text, Err: err})
 }
 
 func (c *Conn) Start(ctx context.Context) error {
 	c.ctx, c.cancel = context.WithCancel(ctx)
-	ck := &cookies.Cookies{Platform: types.Messenger}
-	ck.UpdateValues(parseCookies(c.cookieStr))
+	platform := types.Messenger
+	switch c.creds.Platform {
+	case "messenger-lite":
+		platform = types.MessengerLiteIOS
+	case "facebook":
+		platform = types.Facebook // logged in through facebook.com
+	}
+	ck := &cookies.Cookies{Platform: platform}
+	vals := map[cookies.MetaCookieName]string{}
+	for k, v := range c.creds.Cookies {
+		vals[cookies.MetaCookieName(k)] = v
+	}
+	ck.UpdateValues(vals)
 	if missing := ck.GetMissingCookieNames(); len(missing) > 0 {
 		return fmt.Errorf("missing cookies: %v", missing)
 	}
@@ -111,7 +132,10 @@ func (c *Conn) Start(ctx context.Context) error {
 	c.cli = messagix.NewClient(ck, c.log, &messagix.Config{})
 	user, tbl, err := c.cli.LoadMessagesPage(c.ctx)
 	if err != nil {
-		return fmt.Errorf("load inbox (cookies expired?): %w", err)
+		if isLoggedOut(err) {
+			return ErrLoggedOut
+		}
+		return fmt.Errorf("couldn't load your chats: %w", err)
 	}
 	c.self = user.GetFBID()
 	c.handleTable(tbl)
@@ -121,6 +145,19 @@ func (c *Conn) Start(ctx context.Context) error {
 		return fmt.Errorf("connect: %w", err)
 	}
 	return nil
+}
+
+// Creds is the login as it stands now: Messenger refreshes session
+// cookies as it goes, so save this when quitting.
+func (c *Conn) Creds() auth.Creds {
+	if c.cli == nil {
+		return c.creds
+	}
+	vals := map[string]string{}
+	for k, v := range c.cli.GetCookies().GetAll() {
+		vals[string(k)] = v
+	}
+	return auth.Creds{Platform: c.creds.Platform, Cookies: vals}
 }
 
 func (c *Conn) Close() {
@@ -160,8 +197,8 @@ func (c *Conn) fetchMoreThreads() {
 			c.log.Warn().Err(err).Msg("fetch more threads")
 			return
 		}
-		if tbl == nil {
-			return
+		if tbl == nil || len(tbl.LSDeleteThenInsertThread)+len(tbl.LSUpdateOrInsertThread) == 0 {
+			return // no more chats: stop asking
 		}
 		c.handleTable(tbl)
 		if ks == nil || !ks.HasMoreBefore || ks.MinThreadKey == prevMin {
@@ -185,6 +222,16 @@ func (c *Conn) handleTable(tbl *table.LSTable) {
 	}
 	for _, p := range tbl.LSAddParticipantIdToGroupThread {
 		c.emit(connector.ParticipantEvent{ChatID: id(p.ThreadKey), UserID: id(p.ContactId), Nickname: clean(p.Nickname)})
+	}
+	for _, h := range tbl.LSVerifyHybridThreadExists {
+		if h.ThreadJID != 0 && h.ThreadJID != h.ThreadKey {
+			c.emit(connector.ChatAliasEvent{From: id(h.ThreadKey), To: id(h.ThreadJID)})
+		}
+	}
+	for _, h := range tbl.LSUpdateThreadAuthorityAndMappingWithOTIDFromJID {
+		if h.ThreadJID != 0 && h.ThreadJID != h.ThreadKey {
+			c.emit(connector.ChatAliasEvent{From: id(h.ThreadKey), To: id(h.ThreadJID)})
+		}
 	}
 	for _, t := range tbl.LSDeleteThenInsertThread {
 		c.mu.Lock()
@@ -232,21 +279,43 @@ func (c *Conn) handleTable(tbl *table.LSTable) {
 
 	media := map[string][]connector.Media{}
 	for _, a := range tbl.LSInsertBlobAttachment {
-		m := connector.Media{Kind: kindOf(a.AttachmentType), Ref: a.PreviewUrl}
+		// the full-size file, like the bridge uses; the preview is small and blurry
+		m := connector.Media{Kind: kindOf(a.AttachmentType), Ref: a.PlayableUrl}
 		if m.Ref == "" {
-			m.Ref = a.PlayableUrl
+			m.Ref = a.PreviewUrl
 		}
 		media[a.MessageId] = append(media[a.MessageId], m)
 	}
 
 	defer func() { // reactions after messages, so they have something to attach to
 		for _, r := range tbl.LSUpsertReaction {
-			c.emit(connector.ReactionEvent{ChatID: id(r.ThreadKey), MessageID: r.MessageId, ActorID: id(r.ActorId), Emoji: r.Reaction})
+			c.emit(connector.ReactionEvent{ChatID: id(r.ThreadKey), MessageID: r.MessageId, ActorID: id(r.ActorId), Emoji: clean(r.Reaction)})
 		}
 		for _, r := range tbl.LSDeleteReaction {
 			c.emit(connector.ReactionEvent{ChatID: id(r.ThreadKey), MessageID: r.MessageId, ActorID: id(r.ActorId)})
 		}
 	}()
+
+	// a card's link usually comes in a separate "button" record
+	ctaURL := map[string]string{}
+	for _, cta := range tbl.LSInsertAttachmentCta {
+		if u := firstNonEmpty(cta.ActionUrl, cta.NativeUrl); u != "" && ctaURL[cta.MessageId] == "" {
+			ctaURL[cta.MessageId] = cleanURL(u)
+		}
+	}
+	// shared posts and links ("XMA" cards)
+	for _, x := range tbl.LSInsertXmaAttachment {
+		card := connector.Media{
+			Kind:   connector.Link,
+			Title:  clean(oneLine(firstNonEmpty(x.TitleText, x.HeaderTitle, x.BodyText, x.DescriptionText, x.AccessibilitySummaryText))),
+			Source: clean(oneLine(firstNonEmpty(x.SourceText, x.HeaderSubtitleText, x.AttributionAppName, x.SubtitleText))),
+			URL:    firstNonEmpty(cleanURL(x.ActionUrl), ctaURL[x.MessageId]),
+		}
+		if card.Title == "" && card.URL == "" {
+			continue
+		}
+		media[x.MessageId] = append(media[x.MessageId], card)
+	}
 
 	msgs := tbl.LSInsertMessage
 	for _, u := range tbl.LSUpsertMessage {
@@ -267,7 +336,7 @@ func (c *Conn) handleTable(tbl *table.LSTable) {
 			ID:       m.MessageId,
 			ChatID:   id(m.ThreadKey),
 			SenderID: id(m.SenderId),
-			Text:     clean(m.Text),
+			Text:     cleanBody(m.Text),
 			Time:     time.UnixMilli(m.TimestampMs),
 			FromMe:   m.SenderId == c.self,
 			Media:    att,
@@ -275,6 +344,7 @@ func (c *Conn) handleTable(tbl *table.LSTable) {
 		if m.OfflineThreadingId != "" {
 			msg.ReplacesID = pendingID(m.OfflineThreadingId)
 		}
+		msg.ReplyToID = m.ReplySourceId
 		c.emit(connector.MessageEvent{Message: msg})
 	}
 }
@@ -329,7 +399,8 @@ func (c *Conn) LoadOlder(ctx context.Context, chatID string, before time.Time, b
 		return err
 	}
 	if c.isEncrypted(key) {
-		return nil // no server history for encrypted chats yet (needs PIN restore)
+		// older encrypted messages come from the PIN backup, if restored
+		return c.loadEncryptedHistory(ctx, chatID, c.isEncryptedGroup(key), before)
 	}
 	resp, err := c.cli.ExecuteTasks(ctx, &socket.FetchMessagesTask{
 		ThreadKey:            key,
@@ -359,6 +430,9 @@ func (c *Conn) connectE2EE() {
 		return
 	}
 	c.cli.SetDevice(dev)
+	c.mu.Lock()
+	c.wadev = dev
+	c.mu.Unlock()
 	if dev.ID == nil {
 		if err := c.cli.RegisterE2EE(c.ctx, c.self); err != nil {
 			c.status("encrypted chats off", fmt.Errorf("register device: %w", err))
@@ -385,6 +459,14 @@ func (c *Conn) connectE2EE() {
 }
 
 func (c *Conn) onWA(raw any) {
+	switch raw.(type) {
+	case *events.Disconnected:
+		c.status("reconnecting encrypted chats…", nil)
+		return
+	case *events.Connected:
+		c.status("connected", nil)
+		return
+	}
 	evt, ok := raw.(*events.FBMessage)
 	if !ok {
 		return
@@ -401,11 +483,12 @@ func (c *Conn) onWA(raw any) {
 	if r := content.GetReactionMessage(); r != nil {
 		c.emit(connector.ReactionEvent{
 			ChatID: chat.User, MessageID: r.GetKey().GetID(),
-			ActorID: evt.Info.Sender.User, Emoji: r.GetText(),
+			ActorID: evt.Info.Sender.User, Emoji: connector.SafeText(r.GetText(), false),
 		})
 		return
 	}
 	text, media := waContent(content)
+	text = connector.SafeText(text, true)
 	if text == "" && len(media) == 0 {
 		return
 	}
@@ -432,13 +515,14 @@ func (c *Conn) onWA(raw any) {
 	c.mu.Unlock()
 
 	msg := connector.Message{
-		ID:       evt.Info.ID,
-		ChatID:   chat.User,
-		SenderID: evt.Info.Sender.User,
-		Text:     text,
-		Time:     evt.Info.Timestamp,
-		FromMe:   evt.Info.Sender.User == c.SelfID(),
-		Media:    media,
+		ID:        evt.Info.ID,
+		ChatID:    chat.User,
+		SenderID:  evt.Info.Sender.User,
+		Text:      text,
+		Time:      evt.Info.Timestamp,
+		FromMe:    evt.Info.Sender.User == c.SelfID(),
+		Media:     media,
+		ReplyToID: evt.FBApplication.GetMetadata().GetQuotedMessage().GetStanzaID(),
 	}
 	c.emit(connector.ChatEvent{Chat: connector.Chat{
 		ID:           chat.User,
@@ -491,6 +575,28 @@ func snippetOf(m connector.Message) string {
 
 // ---- sending ----
 
+// readyWA makes sure the encrypted connection is up before using it. After
+// sleep or a network change it drops; the library reconnects by itself, so
+// wait for that first, then reconnect ourselves.
+func (c *Conn) readyWA(ctx context.Context, wa *whatsmeow.Client) (*whatsmeow.Client, error) {
+	if wa == nil {
+		return nil, errors.New("encrypted chats are still starting, try again in a moment")
+	}
+	if wa.IsConnected() {
+		return wa, nil
+	}
+	if wa.WaitForConnection(10 * time.Second) {
+		return wa, nil
+	}
+	if err := wa.ConnectContext(ctx); err != nil && !wa.IsConnected() {
+		c.log.Warn().Err(err).Msg("reconnect encrypted chats")
+	}
+	if wa.WaitForConnection(15 * time.Second) {
+		return wa, nil
+	}
+	return nil, errors.New("encrypted chats are offline; check your connection and try again")
+}
+
 func (c *Conn) isEncrypted(key int64) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -521,7 +627,11 @@ func lsMentions(text string, mentions []connector.Mention) socket.Mentions {
 	return out
 }
 
-func (c *Conn) Send(ctx context.Context, chatID, text string, mentions []connector.Mention) error {
+func (c *Conn) Send(ctx context.Context, chatID, text string, mentions []connector.Mention, reply *connector.ReplyRef) error {
+	replyTo := ""
+	if reply != nil {
+		replyTo = reply.ID
+	}
 	key, err := strconv.ParseInt(chatID, 10, 64)
 	if err != nil {
 		return err
@@ -536,7 +646,7 @@ func (c *Conn) Send(ctx context.Context, chatID, text string, mentions []connect
 		// show it now; Messenger's echo (same otid) replaces it
 		pend := connector.Message{
 			ID: pendingID(strconv.FormatInt(otid, 10)), ChatID: chatID, SenderID: c.SelfID(),
-			Text: text, Time: time.Now(), FromMe: true, Pending: true,
+			Text: text, Time: time.Now(), FromMe: true, Pending: true, ReplyToID: replyTo,
 		}
 		c.emit(connector.ChatEvent{Chat: connector.Chat{ID: chatID, Snippet: snippetOf(pend), LastActivity: pend.Time}})
 		c.emit(connector.MessageEvent{Message: pend})
@@ -552,6 +662,9 @@ func (c *Conn) Send(ctx context.Context, chatID, text string, mentions []connect
 		if ms := lsMentions(text, mentions); len(ms) > 0 {
 			task.MentionData = ms.ToData()
 		}
+		if reply != nil {
+			task.ReplyMetaData = &socket.ReplyMetaData{ReplyMessageId: reply.ID, ReplySourceType: 1}
+		}
 		if _, err := c.cli.ExecuteTasks(ctx, task); err != nil {
 			c.emit(connector.MessageRemovedEvent{ID: pend.ID})
 			return err
@@ -559,15 +672,15 @@ func (c *Conn) Send(ctx context.Context, chatID, text string, mentions []connect
 		return nil
 	}
 
-	if wa == nil {
-		return errors.New("encrypted chats not connected yet")
+	if wa, err = c.readyWA(ctx, wa); err != nil {
+		return err
 	}
 	jid := waTypes.JID{User: chatID, Server: waTypes.MessengerServer}
 	if tt == table.ENCRYPTED_OVER_WA_GROUP {
 		jid.Server = waTypes.GroupServer
 	}
 	msgID := strconv.FormatInt(methods.GenerateEpochID(), 10)
-	pend := connector.Message{ID: msgID, ChatID: chatID, SenderID: c.SelfID(), Text: text, Time: time.Now(), FromMe: true, Pending: true}
+	pend := connector.Message{ID: msgID, ChatID: chatID, SenderID: c.SelfID(), Text: text, Time: time.Now(), FromMe: true, Pending: true, ReplyToID: replyTo}
 	c.emit(connector.MessageEvent{Message: pend}) // show it now
 	// encrypted mentions: "@Name" becomes "@<id>@msgr" plus the ID list
 	wireText := text
@@ -583,16 +696,28 @@ func (c *Conn) Send(ctx context.Context, chatID, text string, mentions []connect
 		Content: &waConsumerApplication.ConsumerApplication_Content_MessageText{
 			MessageText: &waCommon.MessageText{Text: proto.String(wireText), MentionedJID: mentioned},
 		},
-	}), &waMsgApplication.MessageApplication_Metadata{}, whatsmeow.SendRequestExtra{ID: msgID})
+	}), replyMeta(reply), whatsmeow.SendRequestExtra{ID: msgID})
 	if err != nil {
 		c.emit(connector.MessageRemovedEvent{ID: msgID})
 		return err
 	}
 	// Encrypted sends don't echo back, so confirm our own message.
-	msg := connector.Message{ID: msgID, ChatID: chatID, SenderID: c.SelfID(), Text: text, Time: resp.Timestamp, FromMe: true}
+	msg := connector.Message{ID: msgID, ChatID: chatID, SenderID: c.SelfID(), Text: text, Time: resp.Timestamp, FromMe: true, ReplyToID: replyTo}
 	c.emit(connector.ChatEvent{Chat: connector.Chat{ID: chatID, Snippet: snippetOf(msg), LastActivity: msg.Time, Encrypted: true, Group: tt == table.ENCRYPTED_OVER_WA_GROUP}})
 	c.emit(connector.MessageEvent{Message: msg})
 	return nil
+}
+
+// replyMeta quotes the replied-to message in an encrypted send.
+func replyMeta(reply *connector.ReplyRef) *waMsgApplication.MessageApplication_Metadata {
+	meta := &waMsgApplication.MessageApplication_Metadata{}
+	if reply != nil {
+		meta.QuotedMessage = &waMsgApplication.MessageApplication_Metadata_QuotedMessage{
+			StanzaID:    proto.String(reply.ID),
+			Participant: proto.String(waTypes.JID{User: reply.SenderID, Server: waTypes.MessengerServer}.String()),
+		}
+	}
+	return meta
 }
 
 func wrapContent(content *waConsumerApplication.ConsumerApplication_Content) *waConsumerApplication.ConsumerApplication {
@@ -628,8 +753,8 @@ func (c *Conn) React(ctx context.Context, chatID, messageID, senderID, emoji str
 			return err
 		}
 	} else {
-		if wa == nil {
-			return errors.New("encrypted chats not connected yet")
+		if wa, err = c.readyWA(ctx, wa); err != nil {
+			return err
 		}
 		jid := waTypes.JID{User: chatID, Server: waTypes.MessengerServer}
 		if tt == table.ENCRYPTED_OVER_WA_GROUP {
@@ -691,8 +816,8 @@ func (c *Conn) SendFile(ctx context.Context, chatID string, file connector.Attac
 		return err // the echo comes back as a normal message
 	}
 
-	if wa == nil {
-		return errors.New("encrypted chats not connected yet")
+	if wa, err = c.readyWA(ctx, wa); err != nil {
+		return err
 	}
 	jid := waTypes.JID{User: chatID, Server: waTypes.MessengerServer}
 	if tt == table.ENCRYPTED_OVER_WA_GROUP {
@@ -800,6 +925,69 @@ func reencodePNG(data []byte) []byte {
 	return buf.Bytes()
 }
 
+// KnowChat: after a restart the connector has forgotten which chats are
+// encrypted until Messenger mentions them again. Sending an encrypted 1:1
+// the plain way fails ("Thread Disabled"), so trust what the store knows.
+func (c *Conn) KnowChat(ch connector.Chat) {
+	key, err := strconv.ParseInt(ch.ID, 10, 64)
+	if err != nil || !ch.Encrypted {
+		return
+	}
+	tt := table.ENCRYPTED_OVER_WA_ONE_TO_ONE
+	if ch.Group {
+		tt = table.ENCRYPTED_OVER_WA_GROUP
+	}
+	c.mu.Lock()
+	if !c.threadType[key].IsWhatsApp() {
+		c.threadType[key] = tt
+	}
+	c.mu.Unlock()
+}
+
+// ---- people ----
+
+func (c *Conn) SearchPeople(ctx context.Context, query string) ([]connector.Person, error) {
+	resp, err := c.cli.ExecuteTasks(ctx, &socket.SearchUserTask{
+		Query: query,
+		SupportedTypes: []table.SearchType{
+			table.SearchTypeContact, table.SearchTypeNonContact, table.SearchTypeGroup, table.SearchTypePage,
+		},
+		SurfaceType: 5,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var out []connector.Person
+	seen := map[int64]bool{}
+	for _, r := range resp.LSInsertSearchResult {
+		fbid := r.GetFBID()
+		canMessage := r.CanViewerMessage || (r.OtherUserId != 0 && r.BlockedByViewerStatus == 0)
+		if !r.ThreadType.IsOneToOne() || !canMessage || fbid == 0 || fbid == c.self || seen[fbid] {
+			continue
+		}
+		seen[fbid] = true
+		c.contact(fbid, r.DisplayName)
+		out = append(out, connector.Person{ID: id(fbid), Name: clean(r.DisplayName)})
+	}
+	return out, nil
+}
+
+// OpenDirect: 1:1 chats on Messenger are encrypted, and the person's user
+// ID is the chat ID. Sending to it works straight away; nothing needs to
+// be created on Messenger first.
+func (c *Conn) OpenDirect(ctx context.Context, userID string) (string, error) {
+	key, err := strconv.ParseInt(userID, 10, 64)
+	if err != nil {
+		return "", err
+	}
+	c.mu.Lock()
+	if _, known := c.threadType[key]; !known {
+		c.threadType[key] = table.ENCRYPTED_OVER_WA_ONE_TO_ONE
+	}
+	c.mu.Unlock()
+	return userID, nil
+}
+
 // ---- media ----
 
 func (c *Conn) FetchMedia(ctx context.Context, m connector.Media) ([]byte, error) {
@@ -810,8 +998,9 @@ func (c *Conn) FetchMedia(ctx context.Context, m connector.Media) ([]byte, error
 		c.mu.Lock()
 		wa := c.wa
 		c.mu.Unlock()
-		if wa == nil {
-			return nil, errors.New("encrypted chats not connected yet")
+		var err error
+		if wa, err = c.readyWA(ctx, wa); err != nil {
+			return nil, err
 		}
 		b, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(m.Ref, waImagePrefix))
 		if err != nil {
@@ -823,11 +1012,14 @@ func (c *Conn) FetchMedia(ctx context.Context, m connector.Media) ([]byte, error
 		}
 		return wa.DownloadFB(ctx, t.GetIntegral(), whatsmeow.MediaImage)
 	}
+	if err := checkMediaURL(m.Ref); err != nil {
+		return nil, err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, m.Ref, nil)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := mediaHTTP.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -838,23 +1030,66 @@ func (c *Conn) FetchMedia(ctx context.Context, m connector.Media) ([]byte, error
 	return io.ReadAll(io.LimitReader(resp.Body, 25<<20))
 }
 
+// mediaHTTP downloads photos: bounded time, and redirects must stay on
+// Meta's https media hosts.
+var mediaHTTP = &http.Client{
+	Timeout: 60 * time.Second,
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 5 {
+			return errors.New("too many redirects")
+		}
+		return checkMediaURL(req.URL.String())
+	},
+}
+
+// checkMediaURL: photos only come from Meta's media servers, over https.
+func checkMediaURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" {
+		return errors.New("media link isn't https")
+	}
+	host := strings.ToLower(u.Hostname())
+	for _, ok := range []string{"fbcdn.net", "facebook.com", "fbsbx.com", "messenger.com", "fbcdn.com"} {
+		if host == ok || strings.HasSuffix(host, "."+ok) {
+			return nil
+		}
+	}
+	return fmt.Errorf("media from %s isn't from Messenger, so it wasn't loaded", host)
+}
+
 // ---- helpers ----
 
 func pendingID(otid string) string { return "pending:" + otid }
 
-func id(n int64) string { return strconv.FormatInt(n, 10) }
-
-func clean(s string) string { return html.UnescapeString(s) }
-
-func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
-
-func parseCookies(s string) map[cookies.MetaCookieName]string {
-	out := map[cookies.MetaCookieName]string{}
-	for _, part := range strings.Split(s, ";") {
-		k, v, ok := strings.Cut(strings.TrimSpace(part), "=")
-		if ok && k != "" {
-			out[cookies.MetaCookieName(k)] = v
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return v
 		}
 	}
-	return out
+	return ""
 }
+
+// cleanURL: Facebook links sometimes come without the host, and outside
+// links come wrapped in Facebook's redirect (l.php?u=...).
+func cleanURL(u string) string {
+	if strings.HasPrefix(u, "/") {
+		u = "https://www.facebook.com" + u
+	}
+	if p, err := url.Parse(u); err == nil && p.Path == "/l.php" {
+		if real := p.Query().Get("u"); real != "" {
+			return real
+		}
+	}
+	return u
+}
+
+func id(n int64) string { return strconv.FormatInt(n, 10) }
+
+// clean makes a one-line field (name, title, snippet) safe to show.
+func clean(s string) string { return connector.SafeText(html.UnescapeString(s), false) }
+
+// cleanBody makes a message body safe to show, keeping its line breaks.
+func cleanBody(s string) string { return connector.SafeText(html.UnescapeString(s), true) }
+
+func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }

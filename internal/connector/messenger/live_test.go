@@ -14,6 +14,9 @@ import (
 	"go.mau.fi/mautrix-meta/pkg/messagix/cookies"
 	"go.mau.fi/mautrix-meta/pkg/messagix/table"
 	"go.mau.fi/mautrix-meta/pkg/messagix/types"
+
+	"github.com/ralph/tuon/internal/auth"
+	"github.com/ralph/tuon/internal/connector"
 )
 
 // TestLiveThreadTypes counts which kinds of chats Messenger sends, page by
@@ -24,15 +27,10 @@ func TestLiveThreadTypes(t *testing.T) {
 	if os.Getenv("TUON_LIVE") == "" {
 		t.Skip("set TUON_LIVE=1")
 	}
-	home, _ := os.UserHomeDir()
-	b, err := os.ReadFile(filepath.Join(home, ".config", "tuon", "cookies.txt"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	zerolog.SetGlobalLevel(zerolog.ErrorLevel)
 	zlog.Logger = zerolog.Nop()
 	ck := &cookies.Cookies{Platform: types.Messenger}
-	ck.UpdateValues(parseCookies(strings.TrimSpace(string(b))))
+	ck.UpdateValues(toCookieMap(liveCreds(t).Cookies))
 	cli := messagix.NewClient(ck, zerolog.Nop(), &messagix.Config{})
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
@@ -90,3 +88,72 @@ func TestLiveThreadTypes(t *testing.T) {
 }
 
 func itoa(n int64) string { return id(n) }
+
+// TestLiveSearchPeople runs a real people search. Read-only.
+//
+//	TUON_LIVE=1 TUON_Q=name go test ./internal/connector/messenger -run TestLiveSearchPeople -v
+func TestLiveSearchPeople(t *testing.T) {
+	if os.Getenv("TUON_LIVE") == "" {
+		t.Skip("set TUON_LIVE=1")
+	}
+	zerolog.SetGlobalLevel(zerolog.ErrorLevel)
+	zlog.Logger = zerolog.Nop()
+	c := New(liveCreds(t), nil, zerolog.Nop())
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	c.ctx, c.cancel = context.WithCancel(ctx)
+	ck := &cookies.Cookies{Platform: types.Messenger}
+	ck.UpdateValues(toCookieMap(c.creds.Cookies))
+	c.cli = messagix.NewClient(ck, zerolog.Nop(), &messagix.Config{})
+	if _, _, err := c.cli.LoadMessagesPage(ctx); err != nil {
+		t.Fatal(err)
+	}
+	connected := make(chan struct{}, 1)
+	c.cli.SetEventHandler(func(_ context.Context, e any) {
+		if _, ok := e.(*messagix.ConnectedEvent); ok {
+			select {
+			case connected <- struct{}{}:
+			default:
+			}
+		}
+	})
+	go func() { // drain events so emit never blocks
+		for range c.events {
+		}
+	}()
+	if err := c.cli.Connect(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer c.cli.Disconnect()
+	<-connected
+	people, err := c.SearchPeople(ctx, os.Getenv("TUON_Q"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("%d people found; first names: %v", len(people), firstNames(people))
+}
+
+func firstNames(ps []connector.Person) []string {
+	var out []string
+	for _, p := range ps {
+		out = append(out, strings.Fields(p.Name)[0])
+	}
+	return out
+}
+
+func liveCreds(t *testing.T) auth.Creds {
+	home, _ := os.UserHomeDir()
+	c, err := auth.Load(filepath.Join(home, ".config", "tuon"))
+	if err != nil {
+		t.Skip("not logged in")
+	}
+	return c
+}
+
+func toCookieMap(m map[string]string) map[cookies.MetaCookieName]string {
+	out := map[cookies.MetaCookieName]string{}
+	for k, v := range m {
+		out[cookies.MetaCookieName(k)] = v
+	}
+	return out
+}

@@ -140,3 +140,61 @@ func TestFolders(t *testing.T) {
 		t.Fatal("Inbox must not be deletable")
 	}
 }
+
+func TestReadStaysRead(t *testing.T) {
+	st, err := OpenPath(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	t0 := time.Now().Add(-time.Hour)
+	_ = st.UpsertChat(connector.Chat{ID: "c", Name: "Team", LastActivity: t0, Unread: true})
+	_ = st.MarkRead("c")
+	// Messenger still thinks it's unread (we sent no "seen") and says so again
+	_ = st.UpsertChat(connector.Chat{ID: "c", Name: "Team", LastActivity: t0, Unread: true})
+	_, _ = st.AddMessage(connector.Message{ID: "old", ChatID: "c", SenderID: "2", Text: "x", Time: t0}, false)
+	if c, _ := st.Chat("c"); c.Unread {
+		t.Fatal("a chat you read must stay read")
+	}
+	// a newer message makes it unread again
+	_, _ = st.AddMessage(connector.Message{ID: "new", ChatID: "c", SenderID: "2", Text: "y", Time: t0.Add(time.Minute)}, false)
+	if c, _ := st.Chat("c"); !c.Unread {
+		t.Fatal("a newer message should mark it unread")
+	}
+}
+
+func TestMergeOneToOne(t *testing.T) {
+	st, err := OpenPath(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Self = "1"
+	// the thread number Messenger lists, unread, filed in Work
+	_ = st.UpsertChat(connector.Chat{ID: "900", Encrypted: true, Unread: true, LastActivity: time.UnixMilli(2000)})
+	_ = st.SetSpace("900", Work)
+	_ = st.AddParticipant(connector.ParticipantEvent{ChatID: "900", UserID: "1"})
+	_ = st.AddParticipant(connector.ParticipantEvent{ChatID: "900", UserID: "42"})
+	// the messages, under the person's ID
+	_, _ = st.AddMessage(connector.Message{ID: "m1", ChatID: "42", SenderID: "42", Text: "hi", Time: time.UnixMilli(1000)}, false)
+	if err := st.MergeOneToOne(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Chat("900"); err != nil {
+		t.Fatal("old id should resolve:", err)
+	}
+	c, _ := st.Chat("42")
+	if c.ID != "42" || c.Space != Work || !c.Unread {
+		t.Fatalf("merged chat = %+v", c)
+	}
+	if got := st.Resolve("900"); got != "42" {
+		t.Fatalf("resolve = %q", got)
+	}
+	rows, _ := st.Chats(Work, "")
+	if len(rows) != 1 {
+		t.Fatalf("want one row in Work, got %d", len(rows))
+	}
+	msgs, _ := st.Messages("42", 10, "1")
+	if len(msgs) != 1 {
+		t.Fatalf("messages = %d", len(msgs))
+	}
+}

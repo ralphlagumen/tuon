@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/ralph/tuon/internal/connector"
@@ -36,7 +37,7 @@ func (m Model) leftWidth() int {
 		}
 		return m.w
 	}
-	return max(28, min(46, m.w*3/10))
+	return max(28, min(52, m.w*3/10))
 }
 
 func (m Model) rightWidth() int {
@@ -51,7 +52,13 @@ func (m Model) rightWidth() int {
 }
 
 func (m Model) bodyHeight() int { return max(3, m.h-6) }
-func (m Model) chatHeight() int { return max(1, m.bodyHeight()-2) }
+func (m Model) chatHeight() int {
+	rows := 1
+	if m.composing() {
+		rows = m.compose.Height()
+	}
+	return max(1, m.bodyHeight()-1-rows)
+}
 func (m Model) searching() bool { return m.inputKind == inputSearch || m.query != "" }
 
 func (m Model) View() string {
@@ -83,8 +90,24 @@ func (m Model) View() string {
 		}
 		lines[i] = paint(l, m.w)
 	}
+	// Make every line differ from the last frame (an invisible reset that
+	// alternates), so Bubble Tea redraws all of them each time. If the
+	// terminal ever scrolls behind our back, the next frame wipes it out
+	// instead of leaving shifted copies of unchanged lines.
+	frameTick = !frameTick
+	tag := "\x1b[0m"
+	if frameTick {
+		tag = "\x1b[m"
+	}
+	for i := range lines {
+		lines[i] += tag
+	}
+	// keep the terminal's line wrap off (some terminals reset it)
+	lines[0] = "\x1b[?7l" + lines[0]
 	return strings.Join(lines, "\n")
 }
+
+var frameTick bool // only touched from Bubble Tea's view goroutine
 
 func (m Model) mainView() []string {
 	lw, rw := m.leftWidth(), m.rightWidth()
@@ -109,9 +132,9 @@ func (m Model) mainView() []string {
 		return fit(l, lw) + sFaint.Render("│") + fit(r, rw)
 	}
 
-	status := sMuted.Render(m.status + " ")
+	status := sMuted.Render(termSafe(m.status) + " ")
 	if m.statusErr {
-		status = sErr.Render(m.status + " ")
+		status = sErr.Render(termSafe(m.status) + " ")
 	}
 	out := []string{
 		spread(" "+sAccentB.Render("tuon")+"  "+sMuted.Render(m.platform), status, m.w),
@@ -133,6 +156,9 @@ func (m Model) mainView() []string {
 	if m.folders {
 		out = m.overlayFolders(out)
 	}
+	if m.soundPick {
+		out = m.overlaySound(out)
+	}
 	return out
 }
 
@@ -141,50 +167,80 @@ func (m Model) footer() string {
 	case m.inputKind == inputCommand:
 		return " " + sAccent.Render(":") + m.input.View()
 	case m.toast != "":
-		return " " + sText.Render(m.toast)
+		return " " + sText.Render(termSafe(m.toast))
 	case m.inputKind == inputFolder:
 		return " " + sAccent.Render("Folder name: ") + m.input.View()
 	case m.folderAskRm:
 		return " " + sText.Render("Delete this folder? Its chats go to Inbox. ") + keyHints("y", "delete", "any key", "cancel")
+	case m.soundPick:
+		return keyHints("↑↓", "sound", "←→", "volume", "space", "play", "x", "sound on/off", "enter", "save", "esc", "cancel")
+	case m.folders && m.folderMove:
+		return keyHints("↑↓", "move folder", "enter", "done")
+	case m.folders && len(m.spaces) > 0 && m.spaces[min(m.folderCur, len(m.spaces)-1)] == store.Inbox:
+		return keyHints("↑↓", "pick", "a", "add", "esc", "close") + "   " + sMuted.Render("Inbox is built in: it can't be moved, renamed or deleted")
 	case m.folders:
-		return keyHints("↑↓", "pick", "a", "add", "r", "rename", "d", "delete", "shift+↑↓", "reorder", "esc", "close")
+		return keyHints("↑↓", "pick", "m", "move", "a", "add", "r", "rename", "d", "delete", "esc", "close")
 	case m.inputKind == inputSearch:
 		return keyHints("enter", "done", "esc", "clear search")
 	case m.composing() && len(m.sugg) > 0:
 		return keyHints("↑↓", "choose", "tab", "tag person", "esc", "close")
 	case m.composing():
-		return keyHints("enter", "send", "@", "tag", "@~/", "attach file", "ctrl+v", "paste image", "↑", "pick a message", "esc", "chats")
+		return keyHints("enter", "send", "alt+enter", "new line", "@", "tag", "@~/", "attach", "ctrl+v", "paste image", "ctrl+o", "newest photo", "↑", "pick message", "esc", "chats")
 	case m.reacting:
 		return keyHints("1-6", "react", "x", "remove mine", "esc", "cancel")
 	case m.focus == focusChat && m.selecting:
-		return keyHints("↑↓", "pick", "r", "react", "y", "copy", "o", "view photo", "esc", "back to typing", "tab", "chat list")
+		return keyHints("↑↓", "pick", "enter", "reply", "r", "react", "y", "copy", "o", "open", "esc", "back to typing", "tab", "chat list")
 	default:
-		return keyHints("↑↓", "browse", "←→", "folders", "enter", "open", "/", "search all", "t", "move chat", "f", "edit folders", "?", "help")
+		return keyHints("↑↓", "browse", "←→ 1-9", "folders", "u", "unread", "enter", "open", "/", "search", "t", "move chat", "f", "edit folders", "?", "help")
 	}
 }
 
 // ---- left: chat list ----
 
+// tabs: "Unread ⟨5⟩   Favorite   Work ⟨2⟩   Inbox". The current tab is
+// amber; unread counts are small amber pills. Keys live in the footer
+// (1-9, u, ←→), so the tabs stay clean.
 func (m Model) tabs() string {
-	build := func(sep string) string {
+	type tab struct {
+		name    string
+		n       int
+		current bool
+	}
+	var tabs []tab
+	for _, sp := range m.tabSpaces() {
+		t := tab{name: store.Label(sp), n: m.counts[sp], current: sp == m.space}
+		if sp == store.Unread {
+			t.n = m.unreadTotal()
+		}
+		tabs = append(tabs, t)
+	}
+	render := func(t tab, nameW int) string {
+		name := t.name
+		if nameW > 0 {
+			name = ansi.Truncate(name, nameW, "…")
+		}
+		out := sMuted.Render(name)
+		if t.current {
+			out = sAccentB.Render(name)
+		}
+		if t.n > 0 {
+			out += " " + sBadge.Render(fmt.Sprintf(" %d ", t.n))
+		}
+		return out
+	}
+	build := func(sep string, nameW int) string {
 		var parts []string
-		for i, sp := range m.spaces {
-			label := fmt.Sprintf("%d %s", i+1, store.Label(sp))
-			if n := m.counts[sp]; n > 0 {
-				label += fmt.Sprintf(" %d", n)
-			}
-			if sp == m.space {
-				parts = append(parts, sAccentB.Render(label))
-			} else {
-				parts = append(parts, sMuted.Render(label))
-			}
+		for _, t := range tabs {
+			parts = append(parts, render(t, nameW))
 		}
 		return " " + strings.Join(parts, sep)
 	}
-	if full := build("   "); ansi.StringWidth(full) <= m.leftWidth() {
-		return full
+	for _, try := range []string{build("    ", 0), build("   ", 0), build("  ", 0), build("  ", 6), build(" ", 4)} {
+		if ansi.StringWidth(try) <= m.leftWidth() {
+			return try
+		}
 	}
-	return build(" ")
+	return build(" ", 3)
 }
 
 const rowLines = 3 // name, snippet, gap
@@ -207,9 +263,11 @@ func (m Model) listBody(lw, bh int) []string {
 	} else if m.query != "" {
 		out = append(out, " "+sAccent.Render("/ ")+sText.Render(m.query))
 	}
-	if len(m.chats) == 0 {
+	if m.rowCount() == 0 {
 		msg := " Nothing matches."
-		if m.space == store.Inbox && m.query == "" {
+		if m.space == store.Unread && m.query == "" {
+			msg = " All caught up."
+		} else if m.space == store.Inbox && m.query == "" {
 			msg = " All chats are sorted."
 		} else if m.query == "" {
 			msg = " Empty. Press 3, pick a chat, press t."
@@ -221,13 +279,34 @@ func (m Model) listBody(lw, bh int) []string {
 	if m.cursor >= rows {
 		off = m.cursor - rows + 1
 	}
-	for i := off; i < off+rows && i < len(m.chats); i++ {
+	for i := off; i < off+rows && i < m.rowCount(); i++ {
+		if p := m.personAt(i); p != nil {
+			out = append(out, m.personRow(*p, i == m.cursor, lw)...)
+			continue
+		}
 		out = append(out, m.chatRow(m.chats[i], i == m.cursor, lw)...)
 	}
 	for len(out) < bh {
 		out = append(out, "")
 	}
 	return out[:bh]
+}
+
+// personRow: someone from people search (no chat with them in the list).
+func (m Model) personRow(p store.Person, selected bool, lw int) []string {
+	edge := " "
+	if selected {
+		edge = sAccent.Render("▎")
+	}
+	l1 := edge + sAccent.Render("@") + " " + sText.Render(fit(termSafe(p.Name), lw-4)) + " "
+	l2 := edge + "  " + sMuted.Render(fit("Person · enter to message", lw-4)) + " "
+	if selected && m.focus == focusList {
+		band := func(s string) string {
+			return sSelBand.Render(strings.ReplaceAll(fit(s, lw), "\x1b[0m", "\x1b[0m"+bgSeq(cSelBand)))
+		}
+		return []string{band(l1), band(l2), ""}
+	}
+	return []string{l1, l2, ""}
 }
 
 // chatRow: name + time, snippet, then a gap line.
@@ -296,6 +375,9 @@ func (m Model) chatBody(rw, bh int) []string {
 			out = append(out, "")
 		}
 		hint := "Pick a chat on the left and press enter."
+		if m.personView != nil {
+			hint = "Press enter to message " + termSafe(m.personView.Name) + "."
+		}
 		out[bh/2] = strings.Repeat(" ", max(0, (rw-len(hint))/2)) + sMuted.Render(hint)
 		return out
 	}
@@ -332,16 +414,28 @@ func (m Model) chatBody(rw, bh int) []string {
 			pop = append(pop, "  "+row)
 		}
 	}
-	if len(m.atts) > 0 && m.chat != nil { // files waiting to be sent
-		var chips []string
-		for _, a := range m.atts {
-			kind := "File"
-			if a.IsImage() {
-				kind = "Photo"
-			}
-			chips = append(chips, sMine.Render(" "+kind+": "+termSafe(a.Name)+"  "+humanSize(len(a.Data))+" "))
+	if m.replyTo != nil && m.composing() {
+		who := senderLabel(*m.replyTo)
+		if m.replyTo.FromMe {
+			who = "yourself"
 		}
-		pop = append(pop, "  "+strings.Join(chips, " ")+sMuted.Render("   enter sends · backspace removes"))
+		what := m.replyTo.Text
+		if what == "" && len(m.replyTo.Media) > 0 {
+			what = mediaLabel(m.replyTo.Media[0].Kind)
+		}
+		line := sAccent.Render("↩ Replying to "+who+": ") + sMuted.Render(termSafe(strings.Join(strings.Fields(what), " ")))
+		pop = append(pop, "  "+ansi.Truncate(line, max(10, rw-22), "…")+sFaint.Render("   esc cancels"))
+	}
+	if len(m.atts) > 0 && m.chat != nil { // what the [Image #n] tokens are
+		var parts []string
+		for _, a := range m.atts {
+			if strings.Contains(m.compose.Value(), a.token) {
+				parts = append(parts, sAccent.Render(a.token)+" "+sMuted.Render(termSafe(a.file.Name)+" "+humanSize(len(a.file.Data))))
+			}
+		}
+		if len(parts) > 0 {
+			pop = append(pop, "  "+strings.Join(parts, sMuted.Render("   ")))
+		}
 	}
 	for i, p := range pop {
 		if j := len(view) - len(pop) + i; j >= 0 {
@@ -353,7 +447,13 @@ func (m Model) chatBody(rw, bh int) []string {
 	out = append(out, " "+sFaint.Render(strings.Repeat("─", max(0, rw-2))))
 	switch {
 	case m.composing():
-		out = append(out, " "+sAccent.Render("›")+" "+m.compose.View())
+		for i, l := range strings.Split(m.compose.View(), "\n") {
+			mark := "  "
+			if i == 0 {
+				mark = sAccent.Render("›") + " "
+			}
+			out = append(out, " "+mark+l)
+		}
 	case m.compose.Value() != "":
 		out = append(out, " "+sMuted.Render("› "+ansi.Truncate(m.compose.Value(), rw-4, "…")))
 	case m.focus == focusList:
@@ -409,31 +509,70 @@ func (m Model) chatLines() ([]string, []span) {
 	}
 
 	var out []string
+	if len(m.msgs) == 0 && m.chat != nil {
+		note := "No messages yet."
+		if m.chat.Encrypted {
+			note = "No messages here yet. Older encrypted messages are in Messenger's backup: quit tuon and run `tuon history` to restore them with your PIN."
+		}
+		for _, l := range strings.Split(ansi.Wordwrap(note, max(10, rw-4), ""), "\n") {
+			out = append(out, " "+sMuted.Render(l))
+		}
+		return out, nil
+	}
 	spans := make([]span, len(m.msgs))
 	var prev *store.MessageRow
+	albumStart := -1
 	for i := range m.msgs {
 		msg := &m.msgs[i]
 		if msg.Text == "" && len(msg.Media) == 0 {
 			continue
+		}
+		// later photos of an album are shown by its first message
+		if albumStart >= 0 && i > 0 && sameAlbum(m.msgs[i-1], *msg) {
+			spans[i] = spans[albumStart]
+			continue
+		}
+		albumStart = -1
+		if photoOnly(*msg) {
+			albumStart = i
 		}
 		if prev == nil || !sameDay(msg.Time, prev.Time) {
 			label := " " + dayLabel(msg.Time) + " "
 			out = append(out, "", sFaint.Render(" ──")+sMuted.Render(label)+sFaint.Render(strings.Repeat("─", max(0, rw-4-ansi.StringWidth(label)))), "")
 		}
 		newRun := prev == nil || prev.SenderID != msg.SenderID || msg.Time.Sub(prev.Time) >= groupGp || !sameDay(msg.Time, prev.Time)
-		if newRun && prev != nil && sameDay(msg.Time, prev.Time) {
-			out = append(out, "")
+		if prev != nil && sameDay(msg.Time, prev.Time) {
+			out = append(out, "") // a line between messages, even from the same person
 		}
 		prev = msg
 
 		var body []string
+		if q := msg.ReplyTo; q != nil { // what this replies to
+			quote := "↩ " + termSafe(q.Name)
+			if q.Name != "" {
+				quote += ": "
+			}
+			quote += termSafe(strings.Join(strings.Fields(q.Text), " "))
+			body = append(body, sMuted.Render(ansi.Truncate(quote, textW, "…")))
+		}
 		if msg.Text != "" {
 			wrapped := ansi.Hardwrap(ansi.Wordwrap(termSafe(msg.Text), textW, ""), textW, true)
 			for _, l := range strings.Split(wrapped, "\n") {
 				body = append(body, sText.Render(l))
 			}
 		}
+		var others []connector.Media
 		for _, md := range msg.Media {
+			if md.Kind != connector.Photo {
+				others = append(others, md)
+			}
+		}
+		if album := m.albumAt(i); len(album) == 1 {
+			body = append(body, m.mediaLines(album[0], textW)...)
+		} else if len(album) > 1 {
+			body = append(body, m.albumLines(album, textW)...)
+		}
+		for _, md := range others {
 			body = append(body, m.mediaLines(md, textW)...)
 		}
 
@@ -462,6 +601,8 @@ func (m Model) chatLines() ([]string, []span) {
 				rightCol = append(rightCol, chip)
 			}
 			switch {
+			case j == 0 && msg.Pending && time.Since(msg.Time) > 45*time.Second:
+				rightCol = append(rightCol, sErr.Render("not sent"))
 			case j == 0 && msg.Pending:
 				rightCol = append(rightCol, sMuted.Render("sending…"))
 			case j == 0 && (newRun || isSel):
@@ -477,8 +618,25 @@ func (m Model) chatLines() ([]string, []span) {
 			out = append(out, line)
 		}
 		spans[i] = span{start, len(out)}
+		if albumStart == i { // the album's later messages share these lines
+			for j := i + 1; j < len(m.msgs) && sameAlbum(m.msgs[j-1], m.msgs[j]); j++ {
+				spans[j] = spans[i]
+			}
+		}
 	}
 	return out, spans
+}
+
+// albumLines: several photos sent together, as one line (plus the first
+// photo where the terminal can draw it).
+func (m Model) albumLines(album []connector.Media, maxW int) []string {
+	button := sTheirs.Render(" ") + sAccent.Background(lipgloss.Color(cTheirs)).Render(fmt.Sprintf("▸ View %d photos", len(album))) + sTheirs.Render(" ")
+	if m.kitty != nil && m.imagesOn {
+		if lines := m.mediaLines(album[0], maxW); len(lines) > 1 {
+			return append(lines, button)
+		}
+	}
+	return []string{button}
 }
 
 // band gives a line the soft selection background, edge to edge.
@@ -504,7 +662,7 @@ func dayLabel(t time.Time) string {
 func reactionChip(rs []store.ReactionCount) string {
 	var parts []string
 	for _, r := range rs {
-		p := r.Emoji
+		p := termSafe(r.Emoji)
 		if r.Count > 1 {
 			p += " " + fmt.Sprint(r.Count)
 		}
@@ -544,6 +702,9 @@ func stamp(t time.Time) string {
 }
 
 func (m Model) mediaLines(md connector.Media, maxW int) []string {
+	if md.Kind == connector.Link {
+		return m.linkCard(md, maxW)
+	}
 	tag := sTheirs.Render(" " + mediaLabel(md.Kind) + " ")
 	if md.Kind != connector.Photo || md.Ref == "" {
 		return []string{tag}
@@ -554,21 +715,36 @@ func (m Model) mediaLines(md connector.Media, maxW int) []string {
 			return lines
 		}
 	}
+	// no real photos here: a clean tag (o pops up the real photo); pixel
+	// previews only if asked for with :images blocks
+	if img := m.imgs[md.Ref]; img != nil && m.imagesOn && m.blocks {
+		cols, rows := min(maxW, 44), max(4, min(14, m.chatHeight()/3))
+		key := fmt.Sprintf("%s|%d|%d", md.Ref, cols, rows)
+		if lines, ok := thumbCache[key]; ok {
+			return lines
+		}
+		if lines := renderImage(img, cols, rows); len(lines) > 0 {
+			thumbCache[key] = lines
+			return lines
+		}
+	}
 	switch {
 	case m.failed[md.Ref] != "":
-		return []string{tag + sMuted.Render("  couldn't load, press o to retry")}
-	case m.pending[md.Ref]:
-		return []string{tag + sMuted.Render("  loading…")}
+		return []string{tag + sMuted.Render("  couldn't load, click to retry")}
 	}
-	return []string{tag + sMuted.Render("  press o to view")}
+	button := sTheirs.Render(" ") + sAccent.Background(lipgloss.Color(cTheirs)).Render("▸ View photo") + sTheirs.Render(" ")
+	if m.pending[md.Ref] {
+		button += sMuted.Render("  loading…")
+	}
+	return []string{button}
 }
 
 // ---- image ----
 
 func (m Model) imageView() []string {
-	imgs := m.chatImages()
+	imgs := m.viewImages()
 	idx := min(m.imgIdx, len(imgs)-1)
-	left := " " + sAccentB.Render("tuon") + "  " + sAccent.Render("<") + " " + sBold.Render(m.chat.Display)
+	left := " " + sAccentB.Render("tuon") + "  " + sAccent.Render("<") + " " + sBold.Render(termSafe(m.chat.Display))
 	areaH := m.h - 4
 	var body []string
 	res := ""
@@ -640,7 +816,9 @@ func (m Model) overlayFolders(lines []string) []string {
 			label += sMuted.Render("  (built in)")
 		}
 		row := fit(" "+label, inner-9) + sMuted.Render(fmt.Sprintf("%4d chats", n))
-		if i == m.folderCur {
+		if i == m.folderCur && m.folderMove {
+			row = sAccent.Render("↕") + sSelMsg.Render(fit(row, inner-1))
+		} else if i == m.folderCur {
 			row = sAccent.Render("▎") + sSelMsg.Render(fit(row, inner-1))
 		} else {
 			row = " " + fit(row, inner-1)
@@ -649,6 +827,44 @@ func (m Model) overlayFolders(lines []string) []string {
 	}
 	box = append(box, sAccent.Render("└"+strings.Repeat("─", inner)+"┘"))
 	row := max(4, (m.h-len(box))/2)
+	col := max(0, (m.w-inner-2)/2)
+	for i, b := range box {
+		r := row + i
+		if r >= len(lines) {
+			break
+		}
+		lines[r] = ansi.Cut(lines[r], 0, col) + b + ansi.Cut(lines[r], col+inner+2, m.w)
+	}
+	return lines
+}
+
+// overlaySound draws the notification sound picker.
+func (m Model) overlaySound(lines []string) []string {
+	const inner = 34
+	box := []string{sAccent.Render("┌─ New message sound " + strings.Repeat("─", inner-20) + "┐")}
+	state := sAccent.Render("on")
+	if !m.soundOn {
+		state = sMuted.Render("off")
+	}
+	bars := m.soundVol / 20
+	vol := sAccent.Render(strings.Repeat("▮", bars)) + sFaint.Render(strings.Repeat("▮", 10-min(10, bars)))
+	box = append(box,
+		"│"+fit(" Sound "+state, inner)+"│",
+		"│"+fit(" Volume "+vol+sMuted.Render(fmt.Sprintf(" %d%%", m.soundVol)), inner)+"│",
+		"│"+strings.Repeat(" ", inner)+"│")
+	rows := max(3, min(len(m.soundNames), m.h-14))
+	off := max(0, min(m.soundCur-rows/2, len(m.soundNames)-rows))
+	for i := off; i < off+rows && i < len(m.soundNames); i++ {
+		row := " " + m.soundNames[i]
+		if i == m.soundCur {
+			row = sAccent.Render("▎") + sSelMsg.Render(fit(row, inner-1))
+		} else {
+			row = " " + fit(row, inner-1)
+		}
+		box = append(box, "│"+fit(row, inner)+"│")
+	}
+	box = append(box, sAccent.Render("└"+strings.Repeat("─", inner)+"┘"))
+	row := max(2, (m.h-len(box))/2)
 	col := max(0, (m.w-inner-2)/2)
 	for i, b := range box {
 		r := row + i
@@ -680,6 +896,7 @@ func (m Model) helpView() []string {
 		" " + sDim.Render("commands"),
 		"  " + sAccent.Render(":work :personal :inbox") + sDim.Render("   switch space"),
 		"  " + sAccent.Render(":mute") + sDim.Render("                    mute / unmute chat"),
+		"  " + sAccent.Render(":sound") + sDim.Render("                   new-message sound and volume"),
 		"  " + sAccent.Render(":images on|off") + sDim.Render("           photo previews"),
 		"  " + sAccent.Render(":quit") + sDim.Render("                    quit"),
 		"",
@@ -761,7 +978,29 @@ func mediaLabel(k connector.MediaKind) string {
 		return "Voice message"
 	case connector.Sticker:
 		return "Sticker"
+	case connector.Link:
+		return "Link"
 	default:
 		return "File"
 	}
+}
+
+// linkCard: a shared post or link, as a small card. Click or o opens it.
+func (m Model) linkCard(md connector.Media, maxW int) []string {
+	w := max(12, min(maxW, 60))
+	title := md.Title
+	if title == "" {
+		title = md.URL
+	}
+	lines := []string{sTheirs.Render(" ") + sAccent.Background(lipgloss.Color(cTheirs)).Render(fit("▸ "+termSafe(title), w)) + sTheirs.Render(" ")}
+	src := md.Source
+	if src == "" {
+		src = "Link"
+	}
+	hint := " · click to open"
+	if md.URL == "" {
+		hint = ""
+	}
+	lines = append(lines, sTheirs.Render(" "+fit(termSafe(src)+hint, w)+" "))
+	return lines
 }
