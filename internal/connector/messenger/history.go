@@ -209,12 +209,57 @@ func (c *Conn) loadEncryptedHistory(ctx context.Context, chatID string, group bo
 		if msg, ok := c.archiveMessage(chatID, m.Message); ok {
 			c.emit(connector.MessageEvent{Message: msg})
 			shown++
+		} else if r, placeholder, ok := c.archiveReaction(chatID, m.Message); ok {
+			// a reaction that failed to decrypt live showed as a "loading"
+			// placeholder under its own ID: apply it, drop the placeholder
+			c.emit(r)
+			c.emit(connector.MessageRemovedEvent{ID: placeholder})
 		}
 	}
 	// counts only, never message content
 	c.log.Warn().Str("chat", chatID).Int("fetched", len(page.Messages)).Int("decrypted", len(msgs)).
 		Int("shown", shown).Bool("thread_missing", page.ThreadMissing).Int64("before", ts).Msg("encrypted history page")
 	return nil
+}
+
+// archiveReaction reads a backed-up reaction: the reaction to apply, and
+// the reaction's own message ID (a live placeholder may carry it).
+func (c *Conn) archiveReaction(chatID string, p *securehistory.DecryptedProtobuf) (connector.ReactionEvent, string, bool) {
+	content, ok := backupContent(p)
+	if !ok || content.GetReactionMessage() == nil {
+		return connector.ReactionEvent{}, "", false
+	}
+	r := content.GetReactionMessage()
+	meta := p.Message.GetMetadata()
+	if meta.GetMessageID() == "" || meta.GetSenderID() == "" || r.GetKey().GetID() == "" {
+		return connector.ReactionEvent{}, "", false
+	}
+	return connector.ReactionEvent{
+		ChatID: chatID, MessageID: r.GetKey().GetID(),
+		ActorID: meta.GetSenderID(), Emoji: connector.SafeText(r.GetText(), false),
+	}, meta.GetMessageID(), true
+}
+
+// backupContent unwraps a backed-up message to its content.
+func backupContent(p *securehistory.DecryptedProtobuf) (*waConsumerApplication.ConsumerApplication_Content, bool) {
+	payload, ok := p.Message.GetPayload().(*waArmadilloBackupMessage.BackupMessage_EncryptedTransportMessage)
+	if !ok {
+		return nil, false
+	}
+	var app waMsgApplication.MessageApplication
+	if proto.Unmarshal(payload.EncryptedTransportMessage, &app) != nil {
+		return nil, false
+	}
+	dec, err := whatsmeow.DecodeFBApplication(&app)
+	if err != nil {
+		return nil, false
+	}
+	ca, ok := dec.Message.(*waConsumerApplication.ConsumerApplication)
+	if !ok {
+		return nil, false
+	}
+	content := ca.GetPayload().GetContent()
+	return content, content != nil
 }
 
 func (c *Conn) archiveMessage(chatID string, p *securehistory.DecryptedProtobuf) (connector.Message, bool) {

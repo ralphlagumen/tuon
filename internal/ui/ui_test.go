@@ -1506,3 +1506,32 @@ func TestPreviewsOff(t *testing.T) {
 		t.Fatalf("opened chat hides messages:\n%s", screen(m))
 	}
 }
+
+func TestReactionFromBackupReplacesPlaceholder(t *testing.T) {
+	m, st, _ := newTestModel(t, 140, 30)
+	now := time.Now()
+	_ = st.UpsertChat(connector.Chat{ID: "j", Name: "Jayson", LastActivity: now.Add(-time.Minute), Encrypted: true})
+	_, _ = st.AddMessage(connector.Message{ID: "mine", ChatID: "j", SenderID: "1", FromMe: true, Text: "so di ko need silipin", Time: now.Add(-time.Minute)}, false)
+	// his reaction failed to decrypt live: a placeholder under the reaction's ID
+	_, _ = st.AddMessage(connector.Message{ID: "react1", ChatID: "j", SenderID: "2", Time: now,
+		Media: []connector.Media{{Kind: connector.Missing}}}, false)
+	m.reloadChats()
+	c, _ := st.Chat("j")
+	m = run(m, m.openChat(c))
+	if !strings.Contains(screen(m), "loading from your backup") {
+		t.Fatal("setup: no placeholder")
+	}
+	// the backup has it: a ❤ on my message
+	next, _ := m.Update(EventsMsg{
+		connector.ReactionEvent{ChatID: "j", MessageID: "mine", ActorID: "2", Emoji: "❤"},
+		connector.MessageRemovedEvent{ID: "react1"},
+	})
+	m = next.(Model)
+	s := screen(m)
+	if strings.Contains(s, "loading from your backup") || !strings.Contains(s, "❤") {
+		t.Fatalf("placeholder still there or reaction missing:\n%s", s)
+	}
+	if c, _ := st.Chat("j"); strings.Contains(c.Snippet, "loading") || st.HasMissing("j") {
+		t.Fatalf("preview still %q, missing=%v", c.Snippet, st.HasMissing("j"))
+	}
+}

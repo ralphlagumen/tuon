@@ -477,8 +477,38 @@ func (s *Store) MarkRead(chatID string) error {
 }
 
 func (s *Store) RemoveMessage(id string) error {
-	_, err := s.DB.Exec(`DELETE FROM tuon_messages WHERE id = ?`, id)
-	return err
+	var chatID string
+	var missing bool
+	_ = s.DB.QueryRow(`SELECT chat_id, missing FROM tuon_messages WHERE id = ?`, id).Scan(&chatID, &missing)
+	if _, err := s.DB.Exec(`DELETE FROM tuon_messages WHERE id = ?`, id); err != nil {
+		return err
+	}
+	if missing && chatID != "" { // the preview may still say "loading": show the newest real message
+		s.refreshSnippet(chatID)
+	}
+	return nil
+}
+
+// refreshSnippet sets a chat's preview from its newest stored message.
+func (s *Store) refreshSnippet(chatID string) {
+	msgs, err := s.Messages(chatID, 1, s.Self)
+	if err != nil {
+		return
+	}
+	snippet := ""
+	if len(msgs) == 1 {
+		m := msgs[0]
+		snippet = m.Text
+		if snippet == "" && len(m.Media) > 0 {
+			snippet = "[" + string(m.Media[0].Kind) + "]"
+		}
+		if m.FromMe {
+			snippet = "You: " + snippet
+		} else if c, err := s.Chat(chatID); err == nil && c.Group && m.SenderName != "" {
+			snippet = strings.Fields(m.SenderName)[0] + ": " + snippet
+		}
+	}
+	_, _ = s.DB.Exec(`UPDATE tuon_chats SET snippet = ? WHERE id = ?`, s.enc(strings.Join(strings.Fields(snippet), " ")), chatID)
 }
 
 // SetReaction stores one person's reaction; emoji "" removes it.
