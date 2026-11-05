@@ -199,6 +199,9 @@ func (s *Store) AddMessage(m connector.Message, chatOpen bool) (bool, error) {
 	}
 	var exists bool
 	_ = s.DB.QueryRow(`SELECT 1 FROM tuon_messages WHERE id = ?`, m.ID).Scan(&exists)
+	if exists && IsMissing(m.Media) {
+		return false, nil // a failed retry never replaces what we already have
+	}
 	_, err := s.DB.Exec(`INSERT INTO tuon_messages (id, chat_id, sender_id, text, ts, from_me, media, pending, reply_to)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET text = excluded.text, media = excluded.media,
 	pending = excluded.pending, reply_to = CASE WHEN excluded.reply_to <> '' THEN excluded.reply_to ELSE reply_to END`,
@@ -212,6 +215,9 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET text = excluded
 	snippet := m.Text
 	if snippet == "" && len(m.Media) > 0 {
 		snippet = "[" + string(m.Media[0].Kind) + "]"
+		if IsMissing(m.Media) {
+			snippet = connector.MissingSnippet
+		}
 		if md := m.Media[0]; md.Kind == connector.Link && md.Title != "" {
 			snippet = "Shared: " + md.Title
 		}
@@ -229,12 +235,47 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET text = excluded
 	_, err = s.DB.Exec(`
 INSERT INTO tuon_chats (id, snippet, last_ts, unread) VALUES (?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
-	snippet = CASE WHEN excluded.last_ts >= last_ts THEN excluded.snippet ELSE snippet END,
+	-- the newest stored message names the chat, even if Messenger already
+	-- bumped the chat's time (an encrypted message that loaded late)
+	snippet = CASE WHEN excluded.last_ts >= last_ts
+	                 OR excluded.last_ts >= (SELECT MAX(ts) FROM tuon_messages WHERE chat_id = excluded.id)
+	               THEN excluded.snippet ELSE snippet END,
 	unread  = CASE WHEN excluded.last_ts > last_ts
 	               THEN (excluded.unread AND excluded.last_ts > read_ts) ELSE unread END,
 	last_ts = MAX(last_ts, excluded.last_ts)`,
 		m.ChatID, strings.Join(strings.Fields(snippet), " "), m.Time.UnixMilli(), b2i(unread))
 	return !exists, err
+}
+
+// IsMissing: the message is a placeholder for one that couldn't be decrypted.
+func IsMissing(media []connector.Media) bool {
+	return len(media) == 1 && media[0].Kind == connector.Missing
+}
+
+// Behind reports whether Messenger says a chat had activity after its
+// newest stored message: something arrived that we don't have yet.
+func (s *Store) Behind(chatID string, activity time.Time) bool {
+	var newest sql.NullInt64
+	_ = s.DB.QueryRow(`SELECT MAX(ts) FROM tuon_messages WHERE chat_id = ?`, chatID).Scan(&newest)
+	return newest.Valid && activity.UnixMilli() > newest.Int64+1000
+}
+
+// HasMissing reports whether a chat still has placeholders waiting for
+// their real message.
+func (s *Store) HasMissing(chatID string) bool {
+	var n int
+	_ = s.DB.QueryRow(`SELECT COUNT(*) FROM tuon_messages WHERE chat_id = ? AND media LIKE '%"Kind":"missing"%'`, chatID).Scan(&n)
+	return n > 0
+}
+
+// Waiting: the chat has a placeholder, or activity newer than its newest message.
+func (s *Store) Waiting(chatID string) bool {
+	if s.HasMissing(chatID) {
+		return true
+	}
+	var last int64
+	_ = s.DB.QueryRow(`SELECT last_ts FROM tuon_chats WHERE id = ?`, chatID).Scan(&last)
+	return s.Behind(chatID, time.UnixMilli(last))
 }
 
 func (s *Store) contactName(id string) string {

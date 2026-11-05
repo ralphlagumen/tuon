@@ -198,3 +198,52 @@ func TestMergeOneToOne(t *testing.T) {
 		t.Fatalf("messages = %d", len(msgs))
 	}
 }
+
+func TestMissingPlaceholder(t *testing.T) {
+	s, err := OpenPath(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	t0 := time.UnixMilli(1_000_000)
+	_ = s.UpsertChat(connector.Chat{ID: "c", LastActivity: t0, Encrypted: true})
+	_, _ = s.AddMessage(connector.Message{ID: "old", ChatID: "c", Text: "game?", Time: t0, FromMe: true}, false)
+
+	// Messenger bumps the chat before the message itself shows up
+	later := t0.Add(5 * time.Minute)
+	_ = s.UpsertChat(connector.Chat{ID: "c", LastActivity: later, Encrypted: true})
+	if !s.Behind("c", later) || !s.Waiting("c") {
+		t.Fatal("chat should be waiting for a message")
+	}
+
+	// it arrives undecryptable: a placeholder
+	ph := connector.Message{ID: "m1", ChatID: "c", SenderID: "raine", Time: later.Add(-time.Second),
+		Media: []connector.Media{{Kind: connector.Missing}}}
+	if isNew, _ := s.AddMessage(ph, false); !isNew {
+		t.Fatal("placeholder should count as new")
+	}
+	if !s.HasMissing("c") {
+		t.Fatal("placeholder not found")
+	}
+
+	// the backup has it: the real one replaces the placeholder, and names the chat
+	real := ph
+	real.Text, real.Media = "okiee", nil
+	_, _ = s.AddMessage(real, false)
+	if s.HasMissing("c") {
+		t.Fatal("placeholder still there")
+	}
+	c, _ := s.Chat("c")
+	if c.Snippet != "okiee" {
+		t.Fatalf("snippet = %q, want the late message", c.Snippet)
+	}
+
+	// a late failed retry never overwrites the real message
+	_, _ = s.AddMessage(ph, false)
+	msgs, _ := s.Messages("c", 10, "me")
+	for _, m := range msgs {
+		if m.ID == "m1" && m.Text != "okiee" {
+			t.Fatalf("real message overwritten: %+v", m)
+		}
+	}
+}

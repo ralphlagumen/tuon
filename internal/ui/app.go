@@ -97,6 +97,7 @@ type Model struct {
 	scroll       int    // lines scrolled up from the bottom
 	loadingOlder bool
 	synced       map[string]bool // encrypted chats already filled from the PIN backup this run
+	refilling    map[string]bool // chats waiting to refill a message that couldn't be decrypted
 	reacting     bool            // reaction picker open
 	selecting    bool            // stepping through messages (react, photo); else typing
 
@@ -163,8 +164,16 @@ type (
 	clearToast    struct{}
 	olderDoneMsg  struct{ err error }
 	newestDoneMsg struct{ err error }
-	searchTick    struct{ seq int }
-	peopleMsg     struct {
+	refillMsg     struct {
+		chatID  string
+		attempt int
+	}
+	refillDoneMsg struct {
+		chatID  string
+		attempt int
+	}
+	searchTick struct{ seq int }
+	peopleMsg  struct {
 		seq    int
 		people []connector.Person
 	}
@@ -268,6 +277,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case refillMsg:
+		return m, m.refill(msg.chatID, msg.attempt)
+
+	case refillDoneMsg:
+		if msg.attempt+1 < len(refillAfter) && m.st.Waiting(msg.chatID) {
+			return m, m.scheduleRefill(msg.chatID, msg.attempt+1)
+		}
+		delete(m.refilling, msg.chatID)
+		return m, nil
+
 	case newestDoneMsg:
 		if msg.err != nil && m.chat != nil && m.chat.Encrypted {
 			return m, m.flash("couldn't load messages from the backup: " + msg.err.Error())
@@ -368,6 +387,7 @@ func (m *Model) applyEvents(evts []any) tea.Cmd {
 		openID = m.chat.ID
 	}
 	chime := false
+	var refills []tea.Cmd
 	for _, e := range evts {
 		switch e := e.(type) {
 		case connector.ContactEvent:
@@ -380,9 +400,18 @@ func (m *Model) applyEvents(evts []any) tea.Cmd {
 				e.Chat.Unread = false
 			}
 			_ = m.st.UpsertChat(e.Chat)
+			// Messenger says an encrypted chat moved on, but no message came
+			// through the encrypted connection: fetch it from the backup.
+			if c, err := m.st.Chat(e.Chat.ID); err == nil && c.Encrypted && e.Chat.LastActivity.After(m.started) &&
+				m.st.Behind(e.Chat.ID, e.Chat.LastActivity) {
+				refills = append(refills, m.startRefill(e.Chat.ID))
+			}
 		case connector.MessageEvent:
 			e.Message.ChatID = m.st.Resolve(e.Message.ChatID)
 			isNew, _ := m.st.AddMessage(e.Message, e.Message.ChatID == openID)
+			if isNew && store.IsMissing(e.Message.Media) {
+				refills = append(refills, m.startRefill(e.Message.ChatID))
+			}
 			if isNew && !e.Message.FromMe && e.Message.Time.After(m.started) {
 				if c, err := m.st.Chat(e.Message.ChatID); err == nil && !c.Muted {
 					chime = true
@@ -409,7 +438,7 @@ func (m *Model) applyEvents(evts []any) tea.Cmd {
 		_ = m.st.MarkRead(openID)
 	}
 	m.reloadChats()
-	cmd := m.reloadMessages()
+	cmd := tea.Batch(append(refills, m.reloadMessages())...)
 	if chime && m.soundOn && time.Since(m.lastChime) > 2*time.Second {
 		m.lastChime = time.Now()
 		name, vol := m.soundName, m.soundVol
@@ -1246,6 +1275,44 @@ func (m *Model) loadNewest() tea.Cmd {
 		ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 		defer cancel()
 		return newestDoneMsg{conn.LoadOlder(ctx, id, time.Now().Add(time.Minute), "")}
+	}
+}
+
+// refillAfter: when to look in the PIN backup again for a message that
+// couldn't be decrypted live. The phone has to back it up first.
+var refillAfter = []time.Duration{8 * time.Second, 30 * time.Second, time.Minute, 3 * time.Minute, 10 * time.Minute, 30 * time.Minute}
+
+// startRefill begins the backup checks for a chat, once at a time.
+func (m *Model) startRefill(chatID string) tea.Cmd {
+	if m.refilling[chatID] {
+		return nil
+	}
+	if m.refilling == nil {
+		m.refilling = map[string]bool{}
+	}
+	m.refilling[chatID] = true
+	return m.scheduleRefill(chatID, 0)
+}
+
+func (m *Model) scheduleRefill(chatID string, attempt int) tea.Cmd {
+	return tea.Tick(refillAfter[attempt], func(time.Time) tea.Msg { return refillMsg{chatID, attempt} })
+}
+
+// refill fetches a chat's newest backed-up messages, which replace any
+// "loading" placeholders with the same IDs.
+func (m *Model) refill(chatID string, attempt int) tea.Cmd {
+	c, err := m.st.Chat(chatID)
+	if err != nil || !m.st.Waiting(chatID) {
+		delete(m.refilling, chatID)
+		return nil
+	}
+	conn, ctx := m.conn, m.ctx
+	return func() tea.Msg {
+		conn.KnowChat(c.Chat)
+		ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		defer cancel()
+		_ = conn.LoadOlder(ctx, chatID, time.Now().Add(time.Minute), "")
+		return refillDoneMsg{chatID, attempt}
 	}
 }
 

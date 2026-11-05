@@ -466,6 +466,9 @@ func (c *Conn) onWA(raw any) {
 	case *events.Connected:
 		c.status("connected", nil)
 		return
+	case *events.UndecryptableMessage:
+		c.onUndecryptable(raw.(*events.UndecryptableMessage))
+		return
 	}
 	evt, ok := raw.(*events.FBMessage)
 	if !ok {
@@ -503,16 +506,7 @@ func (c *Conn) onWA(raw any) {
 			}
 		}
 	}
-	key, _ := strconv.ParseInt(chat.User, 10, 64)
-	tt := table.ENCRYPTED_OVER_WA_ONE_TO_ONE
-	if chat.Server == waTypes.GroupServer {
-		tt = table.ENCRYPTED_OVER_WA_GROUP
-	}
-	c.mu.Lock()
-	if _, known := c.threadType[key]; !known {
-		c.threadType[key] = tt
-	}
-	c.mu.Unlock()
+	tt := c.noteEncrypted(chat)
 
 	msg := connector.Message{
 		ID:        evt.Info.ID,
@@ -523,6 +517,50 @@ func (c *Conn) onWA(raw any) {
 		FromMe:    evt.Info.Sender.User == c.SelfID(),
 		Media:     media,
 		ReplyToID: evt.FBApplication.GetMetadata().GetQuotedMessage().GetStanzaID(),
+	}
+	c.emit(connector.ChatEvent{Chat: connector.Chat{
+		ID:           chat.User,
+		Snippet:      snippetOf(msg),
+		LastActivity: msg.Time,
+		Unread:       !msg.FromMe,
+		Group:        tt == table.ENCRYPTED_OVER_WA_GROUP,
+		Encrypted:    true,
+	}})
+	c.emit(connector.MessageEvent{Message: msg})
+}
+
+// noteEncrypted records an encrypted chat's thread type, so sends and
+// history take the encrypted path.
+func (c *Conn) noteEncrypted(chat waTypes.JID) table.ThreadType {
+	key, _ := strconv.ParseInt(chat.User, 10, 64)
+	tt := table.ENCRYPTED_OVER_WA_ONE_TO_ONE
+	if chat.Server == waTypes.GroupServer {
+		tt = table.ENCRYPTED_OVER_WA_GROUP
+	}
+	c.mu.Lock()
+	if _, known := c.threadType[key]; !known {
+		c.threadType[key] = tt
+	}
+	c.mu.Unlock()
+	return tt
+}
+
+// onUndecryptable: a message arrived that this device couldn't decrypt.
+// Show a placeholder instead of dropping it; the real message (same ID)
+// replaces it if a retry works or the PIN backup has it.
+func (c *Conn) onUndecryptable(evt *events.UndecryptableMessage) {
+	if evt.DecryptFailMode == events.DecryptFailHide {
+		return // reactions, receipts and the like: nothing to show
+	}
+	chat := evt.Info.Chat
+	tt := c.noteEncrypted(chat)
+	msg := connector.Message{
+		ID:       evt.Info.ID,
+		ChatID:   chat.User,
+		SenderID: evt.Info.Sender.User,
+		Time:     evt.Info.Timestamp,
+		FromMe:   evt.Info.Sender.User == c.SelfID(),
+		Media:    []connector.Media{{Kind: connector.Missing}},
 	}
 	c.emit(connector.ChatEvent{Chat: connector.Chat{
 		ID:           chat.User,
@@ -566,6 +604,9 @@ func snippetOf(m connector.Message) string {
 	s := m.Text
 	if s == "" && len(m.Media) > 0 {
 		s = "[" + string(m.Media[0].Kind) + "]"
+		if m.Media[0].Kind == connector.Missing {
+			s = connector.MissingSnippet
+		}
 	}
 	if m.FromMe {
 		s = "You: " + s

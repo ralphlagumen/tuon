@@ -980,6 +980,8 @@ func mediaLabel(k connector.MediaKind) string {
 		return "Sticker"
 	case connector.Link:
 		return "Link"
+	case connector.Missing:
+		return "New message, loading from your backup…"
 	default:
 		return "File"
 	}

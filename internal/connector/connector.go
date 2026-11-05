@@ -26,7 +26,13 @@ const (
 	File    MediaKind = "file"
 	Sticker MediaKind = "sticker"
 	Link    MediaKind = "link" // a shared post or link card
+	// Missing: an encrypted message arrived but couldn't be decrypted. It is
+	// a placeholder that the real message (same ID) replaces when it loads.
+	Missing MediaKind = "missing"
 )
+
+// MissingSnippet is the chat-list line for a message still being fetched.
+const MissingSnippet = "New message, loading…"
 
 type Media struct {
 	Kind MediaKind
