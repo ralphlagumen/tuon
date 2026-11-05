@@ -45,5 +45,6 @@ func liveSetup(t *testing.T) (st *store.Store, kdb *sql.DB, creds auth.Creds, re
 	if kdb, err = keystore.Open(dir, v.DeriveKey("keys.db/2")); err != nil {
 		t.Fatal(err)
 	}
-	return st, kdb, creds, func() { kdb.Close(); st.Close(); release() }
+	unlock := release // not the named result: that would make the closure call itself
+	return st, kdb, creds, func() { kdb.Close(); st.Close(); unlock() }
 }
