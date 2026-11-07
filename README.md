@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/img/logo.svg" width="112" alt="tuon logo: an amber pixel t">
+  <img src="docs/img/logo.svg" width="112" alt="tuon logo: an open enso ring shaped like a chat bubble, with a dot at its centre">
 </p>
 
 <h1 align="center">tuon</h1>
