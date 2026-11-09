@@ -357,6 +357,13 @@ func mustChat(t *testing.T, st *store.Store, id string) store.ChatRow {
 	return c
 }
 
+func TestHeaderShowsLogo(t *testing.T) {
+	m, _, _ := newTestModel(t, 100, 20)
+	if top := strings.SplitN(screen(seed(m)), "\n", 2)[0]; !strings.HasPrefix(top, " tuʘn  ") {
+		t.Fatalf("header %q, want the ring-and-dot logo in tuon", top)
+	}
+}
+
 func TestViewFitsTerminal(t *testing.T) {
 	m, _, _ := newTestModel(t, 100, 20)
 	m = seed(m)

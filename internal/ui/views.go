@@ -142,7 +142,7 @@ func (m Model) mainView() []string {
 		status = sErr.Render("⚠ "+termSafe(m.warning)) + "  " + status
 	}
 	out := []string{
-		spread(" "+sAccentB.Render("tuon")+"  "+sMuted.Render(m.platform), status, m.w),
+		spread(" "+sAccentB.Render(brand)+"  "+sMuted.Render(m.platform), status, m.w),
 		joinRule("┬"),
 		join(m.tabs(), m.chatTitle(rw)),
 		joinRule("┼"),
@@ -793,7 +793,7 @@ func (m Model) mediaLines(md connector.Media, maxW int) []string {
 func (m Model) imageView() []string {
 	imgs := m.viewImages()
 	idx := min(m.imgIdx, len(imgs)-1)
-	left := " " + sAccentB.Render("tuon") + "  " + sAccent.Render("<") + " " + sBold.Render(termSafe(m.chat.Display))
+	left := " " + sAccentB.Render(brand) + "  " + sAccent.Render("<") + " " + sBold.Render(termSafe(m.chat.Display))
 	areaH := m.h - 4
 	var body []string
 	res := ""
@@ -923,7 +923,7 @@ func (m Model) helpView() []string {
 	cmd := func(c, d string) string { return "  " + fit(sAccent.Render(c), 24) + sDim.Render(d) }
 	head := func(t string) string { return " " + sDim.Render(t) }
 	out := []string{
-		" " + sAccentB.Render("tuon") + sDim.Render(" · keys"),
+		" " + sAccentB.Render(brand) + sDim.Render(" · keys"),
 		rule(m.w),
 		head("chat list"),
 		row("↑ ↓", "browse", "enter", "open"),

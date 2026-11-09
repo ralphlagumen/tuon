@@ -29,6 +29,9 @@ const (
 	cErr       = "#E07A7A"
 )
 
+// brand is the name in the header: the "o" is the logo, a ring with a dot.
+const brand = "tuʘn"
+
 var (
 	sText    = lipgloss.NewStyle().Foreground(lipgloss.Color(cText))
 	sBold    = lipgloss.NewStyle().Foreground(lipgloss.Color(cText)).Bold(true)
