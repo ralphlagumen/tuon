@@ -12,6 +12,11 @@
 //     clipboard, opening files and links, its Touch ID helper), and
 //     refuses to script other apps.
 //
+// The sandboxed program is tuon-app. tuon itself is a small launcher with
+// none of the Messenger, encryption or database code: it unlocks, starts
+// tuon-app here, runs the login browser when tuon-app asks (ExitBrowserLogin)
+// and installs updates. So no dependency of the chat app ever runs outside.
+//
 // Network stays open (Messenger needs it). Elsewhere this is a no-op for
 // now. TUON_NO_SANDBOX=1 turns it off for troubleshooting.
 package sandbox
@@ -24,6 +29,20 @@ import (
 )
 
 const envMark = "TUON_SANDBOXED"
+
+// How the launcher and the sandboxed app talk.
+const (
+	// ExitBrowserLogin: the app wants a browser login, which can't run in
+	// the sandbox (the browser needs the keychain). The launcher runs it
+	// and starts the app again with the cookies on LoginFDEnv.
+	ExitBrowserLogin = 43
+	// KeyFDEnv names the pipe (fd 3) with the unlocked vault's key.
+	KeyFDEnv = "TUON_KEY_FD"
+	// LoginFDEnv names the pipe (fd 4) with a browser login's cookies.
+	LoginFDEnv = "TUON_LOGIN_FD"
+	// NoteEnv: why the app runs without the sandbox, for its header.
+	NoteEnv = "TUON_SANDBOX_NOTE"
+)
 
 // denyRead: paths under your home that tuon never needs to read.
 var denyRead = []string{
@@ -67,7 +86,7 @@ func Active() bool { return os.Getenv(envMark) == "1" }
 func Disabled() bool { return os.Getenv("TUON_NO_SANDBOX") != "" }
 
 // Profile is the macOS sandbox profile for a home folder, temp folder and
-// tuon's own program (exe, with its helper next to it).
+// the chat app (exe, tuon-app, with the Touch ID helper next to it).
 func Profile(home, tmp, exe string) string {
 	q := func(p string) string { return fmt.Sprintf("%q", p) } // SBPL strings use Go-compatible escapes
 	var b strings.Builder

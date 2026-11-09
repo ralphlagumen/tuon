@@ -1,4 +1,8 @@
-package auth
+// Package browserlogin logs in to Messenger in a throwaway Chrome-type
+// window and hands back the session cookies. It has no dependencies, so
+// tuon's small launcher (outside the sandbox, where a browser can run) can
+// use it without linking Messenger or database code.
+package browserlogin
 
 import (
 	"bufio"
@@ -70,12 +74,19 @@ func removeStaleProfiles() {
 	}
 }
 
-// BrowserLogin opens the login window and waits until you've logged in.
-func BrowserLogin(ctx context.Context, browser string) (Creds, error) {
+// Platform is the login flavor these cookies belong to (auth.Creds.Platform).
+const Platform = "facebook"
+
+// valid: the cookies of a logged-in session.
+func valid(c map[string]string) bool { return c["c_user"] != "" && c["xs"] != "" }
+
+// Login opens the login window and waits until you've logged in, then
+// returns the window's facebook.com cookies.
+func Login(ctx context.Context, browser string) (map[string]string, error) {
 	removeStaleProfiles()
 	profile, err := os.MkdirTemp("", "tuon-login-")
 	if err != nil {
-		return Creds{}, err
+		return nil, err
 	}
 	cmd, dt, err := startBrowser(browser, profile,
 		"--window-size=760,860",
@@ -84,7 +95,7 @@ func BrowserLogin(ctx context.Context, browser string) (Creds, error) {
 		"--new-window", loginURL)
 	if err != nil {
 		_ = os.RemoveAll(profile)
-		return Creds{}, fmt.Errorf("couldn't open the login window: %w", err)
+		return nil, fmt.Errorf("couldn't open the login window: %w", err)
 	}
 	exited := make(chan struct{})
 	go func() { _ = cmd.Wait(); close(exited) }()
@@ -107,23 +118,23 @@ func BrowserLogin(ctx context.Context, browser string) (Creds, error) {
 	for id := 1; ; id += 3 {
 		select {
 		case <-ctx.Done():
-			return Creds{}, errors.New("login timed out")
+			return nil, errors.New("login timed out")
 		case <-exited:
-			return Creds{}, errors.New("the login window was closed before you logged in")
+			return nil, errors.New("the login window was closed before you logged in")
 		case <-tick.C:
 		}
 		cookies, err := dt.cookies(ctx, id)
 		if err != nil {
 			continue // the window may be busy loading; try again
 		}
-		if c := (Creds{Platform: "facebook", Cookies: cookies}); c.Valid() {
+		if valid(cookies) {
 			// give Messenger a moment to set its remaining cookies
 			time.Sleep(1500 * time.Millisecond)
-			if more, err := dt.cookies(ctx, id+1); err == nil && (Creds{Cookies: more}).Valid() {
-				c.Cookies = more
+			if more, err := dt.cookies(ctx, id+1); err == nil && valid(more) {
+				cookies = more
 			}
 			_ = dt.send(id+2, "Browser.close")
-			return c, nil
+			return cookies, nil
 		}
 	}
 }

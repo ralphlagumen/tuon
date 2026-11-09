@@ -1,107 +1,48 @@
-// Command tuon is a calm, chat-only terminal client for Messenger.
+// Command tuon starts tuon. It is deliberately small: it unlocks tuon's
+// vault, starts the chat app (tuon-app, next to it) inside the macOS
+// sandbox, opens the login browser when the app asks for one, and installs
+// updates. All Messenger, encryption and database code lives in tuon-app,
+// so none of it (or of its dependencies) ever runs outside the sandbox.
+// TestLauncherStaysSmall keeps it that way.
 package main
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/ralph/tuon/internal/safefile"
+	"io"
 	"os"
+	"os/exec"
+	"os/signal"
 	"path/filepath"
-	"runtime/debug"
+	"runtime"
+	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/rs/zerolog"
-	zlog "github.com/rs/zerolog/log"
+	"golang.org/x/term"
 
-	"github.com/ralph/tuon/internal/auth"
-	"github.com/ralph/tuon/internal/connector/messenger"
+	"github.com/ralph/tuon/internal/browserlogin"
+	"github.com/ralph/tuon/internal/paths"
 	"github.com/ralph/tuon/internal/sandbox"
-	"github.com/ralph/tuon/internal/store"
-	"github.com/ralph/tuon/internal/ui"
 	"github.com/ralph/tuon/internal/vault"
 )
 
 func main() {
-	// stay lean: collect garbage sooner, and aim to stay under 96 MB
-	debug.SetGCPercent(50)
-	debug.SetMemoryLimit(96 << 20)
+	setUmask()
 	args := os.Args[1:]
-	privateFiles() // everything tuon writes is readable only by you
-	// the chat app runs sandboxed, as a child of this unsandboxed launcher:
-	// logging in (a browser that needs the keychain) happens out here
-	if len(args) == 0 || args[0] == "--here" || args[0] == "-here" {
-		if code, ok := launchSandboxed(args); ok {
-			os.Exit(code)
-		}
-	}
-	if len(args) > 0 && args[0] == "sandbox-test" {
-		sandboxNote = sandbox.Enter() // only returns if it couldn't
-	}
-	if len(args) > 0 {
-		switch args[0] {
-		case "--here", "-here": // tuon always runs in place now; kept for old habits
-		case "setup":
-			if err := setup(); err != nil {
-				fail(err)
-			}
-			return
-		case "login":
-			if err := login(); err != nil {
-				fail(err)
-			}
-			if err := history(); err != nil { // a new login may be a new account
-				fmt.Fprintln(os.Stderr, "  Couldn't restore history:", err)
-			}
-			return
-		case "history":
-			if err := history(); err != nil {
-				fail(err)
-			}
-			return
-		case "update":
-			if err := update(); err != nil {
-				fail(err)
-			}
-			return
-		case "relink":
-			if err := relink(); err != nil {
-				fail(err)
-			}
-			return
-		case "sandbox-test":
-			os.Exit(sandboxTest())
-		case "logout":
-			if err := logout(len(args) > 1 && args[1] == "--wipe"); err != nil {
-				fail(err)
-			}
-			return
-		case "-h", "--help", "help":
-			fmt.Print(usage)
-			return
-		default:
-			fmt.Fprintf(os.Stderr, "tuon: unknown option %q\n\n%s", args[0], usage)
-			os.Exit(2)
-		}
-	}
-	for {
-		err := run()
-		if !errors.Is(err, messenger.ErrLoggedOut) {
-			if err != nil {
-				fail(err)
-			}
-			return
-		}
-		if sandbox.Active() { // the launcher logs in, outside the sandbox
-			os.Exit(exitNeedLogin)
-		}
-		// the session expired: log in again right here, then open tuon
-		fmt.Println("\n  Messenger logged you out. Log in again to keep going.")
-		if err := login(); err != nil {
+	if len(args) > 0 && args[0] == "update" { // needs to write tuon's own files: never sandboxed
+		if err := update(); err != nil {
 			fail(err)
 		}
+		return
 	}
+	app, err := findApp()
+	if err != nil {
+		fail(err)
+	}
+	os.Exit(launch(app, args))
 }
 
 func fail(err error) {
@@ -109,129 +50,221 @@ func fail(err error) {
 	os.Exit(1)
 }
 
-func run() error {
-	creds, err := loadLogin()
-	if err != nil {
-		return err
+// appName is the chat app's file, next to tuon.
+func appName() string {
+	if runtime.GOOS == "windows" {
+		return "tuon-app.exe"
 	}
-	release, err := store.Lock()
-	if err != nil {
-		return err
-	}
-	defer release()
-	cleanTemp()
-	defer cleanTemp()
+	return "tuon-app"
+}
 
-	st, err := openStore()
+// findApp finds tuon-app next to this program, and only there (never on
+// PATH). One that other users can change isn't used.
+func findApp() (string, error) {
+	exe, err := os.Executable()
+	if err == nil {
+		exe, err = filepath.EvalSymlinks(exe)
+	}
 	if err != nil {
-		return err
+		return "", err
 	}
-	defer st.Close()
-	kdb, allowNew, err := useVault(st)
-	if err != nil {
-		return err
+	p := filepath.Join(filepath.Dir(exe), appName())
+	st, err := os.Stat(p)
+	if err != nil || !st.Mode().IsRegular() {
+		return "", fmt.Errorf("%s is missing next to tuon (%s): run `tuon update` again, or ./install.sh in tuon's source folder", appName(), filepath.Dir(exe))
 	}
-	if kdb != nil {
-		defer kdb.Close()
+	if runtime.GOOS != "windows" && st.Mode().Perm()&0o022 != 0 {
+		return "", fmt.Errorf("%s can be changed by other users, so tuon won't run it: chmod 755 %s", p, p)
 	}
-	_ = st.Prune(ui.KeepMessages)
-	_, _ = st.Compact()
-	removeRetired()
+	return p, nil
+}
 
-	// Logs go to a file so they never draw over the UI.
-	logPath := filepath.Join(store.Dir(), "tuon.log")
-	trimLog(logPath)
-	logFile, err := safefile.Append(logPath, 0o600)
-	if err != nil {
-		return err
+// launch runs the chat app until it's done and returns its exit code.
+func launch(app string, args []string) int {
+	if c, why := sandbox.Command(app, args); c == nil {
+		return runPlain(app, args, why)
 	}
-	defer logFile.Close()
-	level := zerolog.WarnLevel
-	if os.Getenv("TUON_DEBUG") != "" {
-		level = zerolog.DebugLevel // may log message details: only for troubleshooting
+	var key []byte   // the unlocked vault's key, for the app
+	var login []byte // cookies from a browser login, for the app
+	for {
+		if key == nil && needsKey(args) && vault.Exists(paths.Dir()) {
+			v, err := unlock()
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "tuon:", err)
+				return 1
+			}
+			key = v.Handoff()
+		}
+		cmd, _ := sandbox.Command(app, args)
+		code, err := runWith(cmd, key, login)
+		clear(login)
+		login = nil
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "tuon:", err)
+			return 1
+		}
+		if code != sandbox.ExitBrowserLogin {
+			return code
+		}
+		if login, err = browserLogin(); err != nil {
+			fmt.Fprintln(os.Stderr, "tuon:", err)
+			return 1
+		}
 	}
-	zerolog.SetGlobalLevel(level)
-	log := zerolog.New(logFile).With().Timestamp().Logger()
-	zlog.Logger = log // messagix also logs through the global logger
+}
 
-	ctx, cancel := context.WithCancel(context.Background())
+// needsKey: the commands that open tuon's data get the key from here, so a
+// browser login in between doesn't ask for Touch ID twice. The rest (help,
+// logout, sandbox-test) don't need it, so they don't ask.
+func needsKey(args []string) bool {
+	if len(args) == 0 {
+		return true
+	}
+	switch args[0] {
+	case "--here", "-here", "setup", "login", "history", "relink":
+		return true
+	}
+	return false
+}
+
+// runPlain runs the app without a sandbox (other systems, or turned off):
+// it then unlocks and logs in by itself.
+func runPlain(app string, args []string, why string) int {
+	cmd := exec.Command(app, args...)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	cmd.Env = os.Environ()
+	if why != "" {
+		cmd.Env = append(cmd.Env, sandbox.NoteEnv+"="+why)
+	}
+	code, err := run(cmd)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "tuon:", err)
+		return 1
+	}
+	return code
+}
+
+// runWith starts the sandboxed app with the key on fd 3 and a login on
+// fd 4 (each only when there is one). Pipes, never files or arguments.
+func runWith(cmd *exec.Cmd, key, login []byte) (int, error) {
+	pipe := func(b []byte, env string) (*os.File, error) {
+		if b == nil {
+			return os.Open(os.DevNull)
+		}
+		r, w, err := os.Pipe()
+		if err != nil {
+			return nil, err
+		}
+		_, err = w.Write(b) // small: fits the pipe's buffer before the app reads
+		w.Close()
+		if err != nil {
+			r.Close()
+			return nil, err
+		}
+		cmd.Env = append(cmd.Env, env)
+		return r, nil
+	}
+	k, err := pipe(key, sandbox.KeyFDEnv+"=3")
+	if err != nil {
+		return 0, err
+	}
+	defer k.Close()
+	l, err := pipe(login, sandbox.LoginFDEnv+"=4")
+	if err != nil {
+		return 0, err
+	}
+	defer l.Close()
+	cmd.ExtraFiles = []*os.File{k, l} // fd 3 and 4 in the app
+	return run(cmd)
+}
+
+// run runs the app in the foreground and returns its exit code.
+func run(cmd *exec.Cmd) (int, error) {
+	signal.Ignore(os.Interrupt) // ctrl+c belongs to the app while it runs
+	defer signal.Reset(os.Interrupt)
+	err := cmd.Run()
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		return ee.ExitCode(), nil
+	}
+	return 0, err
+}
+
+// unlock opens the vault: Touch ID (or the Mac password) with the Secure
+// Enclave helper, a passphrase otherwise. Creating it is the app's job.
+func unlock() (*vault.Vault, error) {
+	dir := paths.Dir()
+	if vault.Kind(dir) == vault.KindEnclave {
+		h := vault.FindHelper()
+		if h == nil {
+			return nil, errors.New("tuon-keyhelper is missing, so the Touch ID lock can't open: run ./install.sh again")
+		}
+		fmt.Println("  Unlock tuon with Touch ID or your Mac password…")
+		v, err := vault.UnlockEnclave(dir, h)
+		if errors.Is(err, vault.ErrNotConfirmed) {
+			return nil, errors.New("not unlocked")
+		}
+		return v, err
+	}
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		return nil, errors.New("tuon is locked: run it in a terminal to type your passphrase")
+	}
+	for try := 1; try <= 5; try++ {
+		fmt.Print("  tuon passphrase: ")
+		p, err := term.ReadPassword(int(os.Stdin.Fd()))
+		fmt.Println()
+		if err != nil {
+			return nil, err
+		}
+		v, err := vault.UnlockPassphrase(dir, strings.TrimRight(string(p), "\r\n"))
+		clear(p)
+		if err == nil {
+			return v, nil
+		}
+		if try < 5 {
+			wait := time.Duration(1<<(try-1)) * time.Second
+			fmt.Printf("  Wrong passphrase. Try again in %s.\n", wait)
+			time.Sleep(wait)
+		}
+	}
+	return nil, errors.New("too many wrong passphrases")
+}
+
+// browserLogin runs the login window here, outside the sandbox, and
+// returns the session as the app reads it (auth.Creds' JSON).
+func browserLogin() ([]byte, error) {
+	browser := browserlogin.FindBrowser()
+	if browser == "" {
+		return nil, errors.New("no Chrome-type browser found: run `tuon login` and choose another way")
+	}
+	fmt.Print(`
+  A browser window is opening at Facebook's login page (Messenger uses
+  your Facebook account). Check the address bar shows
+  https://www.facebook.com with a padlock, then log in like you normally
+  would. It's a separate, temporary window: your usual browser and its
+  logins aren't touched. When you're in, tuon picks up your session and
+  closes the window.
+
+  Waiting for you to log in…
+`)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
+	cookies, err := browserlogin.Login(ctx, browser)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(struct {
+		Platform string            `json:"platform"`
+		Cookies  map[string]string `json:"cookies"`
+	}{browserlogin.Platform, cookies})
+}
 
-	conn := messenger.New(creds, st.DB, log)
-	if vlt != nil {
-		conn.SetSealer(vlt)
-	}
-	if kdb != nil {
-		conn.SetKeyDB(kdb)
-	}
-	conn.AllowNewDevice = allowNew
-	defer conn.Close()
+var stdin = bufio.NewReader(os.Stdin)
 
-	model := ui.New(ctx, st, conn, "messenger")
-	model.Warn(diskWarning())
-	if sandboxNote != "" {
-		model.Warn(sandboxNote)
+func readLine() string {
+	s, err := stdin.ReadString('\n')
+	if err != nil && err != io.EOF {
+		return ""
 	}
-	if vlt != nil { // lock the screen after 10 idle minutes, or on :lock
-		var touch func() error
-		if h := vault.FindHelper(); vlt.Kind() == vault.KindEnclave && h != nil {
-			touch = func() error { return h.Check() }
-		}
-		model.SetLock(touch, vlt.CheckPassphrase, 10*time.Minute)
-	}
-	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithContext(ctx))
-
-	// Pass connector events to the UI. It sleeps until something arrives,
-	// then gathers whatever else comes within 30ms into one redraw, so a big
-	// sync doesn't redraw hundreds of times and an idle tuon uses no CPU.
-	go func() {
-		for {
-			var batch []any
-			select {
-			case e := <-conn.Events():
-				batch = append(batch, e)
-			case <-ctx.Done():
-				return
-			}
-			wait := time.NewTimer(30 * time.Millisecond)
-		gather:
-			for {
-				select {
-				case e := <-conn.Events():
-					batch = append(batch, e)
-				case <-wait.C:
-					break gather
-				case <-ctx.Done():
-					wait.Stop()
-					return
-				}
-			}
-			p.Send(ui.EventsMsg(batch))
-		}
-	}()
-
-	// Turn off the terminal's line wrap while tuon runs. If a character is
-	// ever drawn wider than we measured, the line is clipped at the edge
-	// instead of wrapping and pushing every row below it down.
-	if os.Getenv("TUON_WRAP") == "" { // debug switch to compare
-		fmt.Print("\x1b[?7l")
-		defer fmt.Print("\x1b[?7h")
-	}
-
-	final, err := p.Run()
-	fm, _ := final.(ui.Model)
-	fm.Cleanup()
-	// Messenger refreshes the session as it goes: keep the newest one.
-	if c := conn.Creds(); c.Valid() && os.Getenv("TUON_COOKIES") == "" {
-		if v, err := openVault(); err == nil {
-			_ = auth.SaveSealed(store.Dir(), v, c)
-		}
-	}
-	if err == tea.ErrProgramKilled {
-		err = nil
-	}
-	if err == nil && fm.LoggedOut() {
-		return messenger.ErrLoggedOut
-	}
-	return err
+	return strings.TrimRight(s, "\r\n")
 }

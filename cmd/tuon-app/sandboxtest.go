@@ -69,6 +69,10 @@ func sandboxTest() int {
 	check("write /private/tmp (shared temp)", false, write("/private/tmp/tuon-probe"))
 	run := func(name string, args ...string) error { return exec.Command(name, args...).Run() }
 	check("start /bin/sh", false, run("/bin/sh", "-c", "true"))
+	if exe, err := os.Executable(); err == nil { // tuon runs unsandboxed: never from in here
+		exe, _ = filepath.EvalSymlinks(exe)
+		check("start the launcher (tuon)", false, run(filepath.Join(filepath.Dir(exe), "tuon"), "--help"))
+	}
 	check("start /usr/bin/curl", false, run("/usr/bin/curl", "--version"))
 	check("start a copied program from temp", false, func() error {
 		p := filepath.Join(os.TempDir(), "tuon-probe-true")

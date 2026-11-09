@@ -17,7 +17,10 @@ say "Building tuon…"
 mkdir -p bin
 # the same flags as releases; the version is the signed tag checked out, if any
 VERSION=$(git describe --tags --exact-match --match 'v*' 2>/dev/null || echo dev)
-CGO_ENABLED=0 GOWORK=off go build -trimpath -buildvcs=false -ldflags "-s -w -buildid= -X main.version=$VERSION" -o bin/tuon ./cmd/tuon
+# tuon is the small launcher; tuon-app (next to it) is the chat app it runs in the sandbox
+for cmd in tuon-app tuon; do
+  CGO_ENABLED=0 GOWORK=off go build -trimpath -buildvcs=false -ldflags "-s -w -buildid= -X main.version=$VERSION" -o "bin/$cmd" "./cmd/$cmd"
+done
 rm -f "$HOME/.config/tuon/source" # older versions kept the clone's path here; updates no longer use it
 
 if [ "$(uname)" = "Darwin" ] && [ ! -d /Applications/Ghostty.app ] && [ ! -d "$HOME/Applications/Ghostty.app" ]; then
@@ -41,6 +44,7 @@ if [ "$(uname)" = "Darwin" ]; then
 fi
 
 mkdir -p "$PREFIX"
+install -m 0755 bin/tuon-app "$PREFIX/tuon-app" # the app first: a new launcher never runs next to an old app
 install -m 0755 bin/tuon "$PREFIX/tuon"
 [ -n "$HELPER" ] && install -m 0755 bin/tuon-keyhelper "$PREFIX/tuon-keyhelper"
 say "Installed $PREFIX/tuon"

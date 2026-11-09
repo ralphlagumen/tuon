@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/ralph/tuon/internal/auth"
+	"github.com/ralph/tuon/internal/browserlogin"
 	"github.com/ralph/tuon/internal/connector/messenger"
 	"github.com/ralph/tuon/internal/keystore"
 	"github.com/ralph/tuon/internal/sandbox"
@@ -51,14 +53,18 @@ func loadLogin() (auth.Creds, error) {
 	if c := strings.TrimSpace(os.Getenv("TUON_COOKIES")); c != "" {
 		return auth.Creds{Platform: "messenger", Cookies: auth.ParseCookieLine(c)}, nil
 	}
-	if c, err := auth.LoadSealed(store.Dir(), v, migrateLogin()); err == nil {
+	c, err := auth.LoadSealed(store.Dir(), v, migrateLogin())
+	if err == nil && pending == nil {
 		return c, nil
 	}
-	if !term.IsTerminal(int(os.Stdin.Fd())) {
-		return auth.Creds{}, fmt.Errorf("not logged in: run `tuon login` first")
+	if err == nil { // logged in again through the launcher's browser: save it
+		if err := login(); err != nil {
+			return auth.Creds{}, err
+		}
+		return auth.LoadSealed(store.Dir(), v, migrateLogin())
 	}
-	if sandbox.Active() { // logging in needs a browser: the launcher does it
-		os.Exit(exitNeedSetup)
+	if pending == nil && !term.IsTerminal(int(os.Stdin.Fd())) {
+		return auth.Creds{}, fmt.Errorf("not logged in: run `tuon login` first")
 	}
 	if err := setup(); err != nil { // first run: log in, then offer history
 		return auth.Creds{}, err
@@ -75,7 +81,12 @@ func login() error {
 		return err
 	}
 	defer release()
-	browser := auth.FindBrowser()
+	if pending != nil {
+		creds := *pending
+		pending = nil
+		return saveLogin(creds)
+	}
+	browser := browserlogin.FindBrowser()
 	fmt.Print("\n  tuon · log in to Messenger\n\n")
 	def := "2"
 	if browser != "" {
@@ -91,6 +102,11 @@ func login() error {
 	}
 	var creds auth.Creds
 	switch {
+	case choice == "1" && browser != "" && sandbox.Active():
+		// the browser can't run in the sandbox (it needs the keychain): the
+		// launcher runs it and starts tuon-app again with the session
+		release()
+		os.Exit(sandbox.ExitBrowserLogin)
 	case choice == "1" && browser != "":
 		creds, err = browserLogin(browser)
 	case choice == "3":
@@ -101,6 +117,12 @@ func login() error {
 	if err != nil {
 		return err
 	}
+	return saveLogin(creds)
+}
+
+// saveLogin keeps a new login, sealed with the vault (after checking it's
+// the account tuon has data for).
+func saveLogin(creds auth.Creds) error {
 	if ok, err := sameAccount(creds); err != nil {
 		return err
 	} else if !ok {
@@ -130,7 +152,28 @@ func browserLogin(browser string) (auth.Creds, error) {
 `)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
-	return auth.BrowserLogin(ctx, browser)
+	cookies, err := browserlogin.Login(ctx, browser)
+	return auth.Creds{Platform: browserlogin.Platform, Cookies: cookies}, err
+}
+
+// pending is a login the launcher did in the browser (outside the sandbox)
+// and passed in on a pipe. login() saves it instead of asking.
+var pending *auth.Creds
+
+// readHandedLogin reads that login, once, then forgets the pipe.
+func readHandedLogin() {
+	if os.Getenv(sandbox.LoginFDEnv) != "4" {
+		return
+	}
+	os.Unsetenv(sandbox.LoginFDEnv)
+	f := os.NewFile(4, "tuon-login")
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, 1<<20))
+	var c auth.Creds
+	if err == nil && json.Unmarshal(b, &c) == nil && c.Valid() {
+		pending = &c
+	}
+	clear(b)
 }
 
 func passwordLogin() (auth.Creds, error) {

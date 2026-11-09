@@ -29,7 +29,8 @@ The first run asks for your messenger.com cookies (see the README). Use your own
 ## Layout
 
 ```
-cmd/tuon/                        entry: flags, login prompt
+cmd/tuon/                        the small launcher: unlock, login browser, update (no Messenger code)
+cmd/tuon-app/                    the chat app: login prompt, setup, history, the UI
 cmd/spike/                       first proof-of-concept CLI (reference only)
 internal/connector/              what any chat platform must provide
 internal/connector/messenger/    Messenger via messagix (+ whatsmeow for encrypted chats)

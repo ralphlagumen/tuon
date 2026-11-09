@@ -1,4 +1,4 @@
-package auth
+package browserlogin
 
 import (
 	"context"
@@ -11,7 +11,7 @@ import (
 // TestBrowserWindowMechanics starts the login browser invisibly, connects
 // to it and reads messenger.com's cookies (no login involved).
 //
-//	TUON_BROWSER_TEST=1 go test ./internal/auth -run TestBrowserWindowMechanics -v
+//	TUON_BROWSER_TEST=1 go test ./internal/browserlogin -run TestBrowserWindowMechanics -v
 func TestBrowserWindowMechanics(t *testing.T) {
 	if os.Getenv("TUON_BROWSER_TEST") == "" {
 		t.Skip("set TUON_BROWSER_TEST=1")
@@ -46,7 +46,7 @@ func TestBrowserWindowMechanics(t *testing.T) {
 		for k := range c {
 			names = append(names, k)
 		}
-		if (Creds{Cookies: c}).Valid() {
+		if valid(c) {
 			t.Fatal("a fresh profile must not be logged in")
 		}
 	}

@@ -14,6 +14,7 @@ import (
 
 	"github.com/ralph/tuon/internal/auth"
 	"github.com/ralph/tuon/internal/keystore"
+	"github.com/ralph/tuon/internal/sandbox"
 	"github.com/ralph/tuon/internal/store"
 	"github.com/ralph/tuon/internal/vault"
 )
@@ -136,15 +137,12 @@ func unlockPassphrase(dir string) (*vault.Vault, error) {
 	return nil, errors.New("too many wrong passphrases")
 }
 
-// keyFDEnv names the pipe the launcher passes the data key on.
-const keyFDEnv = "TUON_KEY_FD"
-
 // handedOver reads the key the launcher passed, once, then forgets the pipe.
 func handedOver(dir string) (*vault.Vault, bool) {
-	if os.Getenv(keyFDEnv) != "3" || !vault.Exists(dir) {
+	if os.Getenv(sandbox.KeyFDEnv) != "3" || !vault.Exists(dir) {
 		return nil, false
 	}
-	os.Unsetenv(keyFDEnv)
+	os.Unsetenv(sandbox.KeyFDEnv)
 	f := os.NewFile(3, "tuon-key")
 	defer f.Close()
 	key := make([]byte, 33)

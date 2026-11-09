@@ -11,6 +11,10 @@ and versions follow [Semantic Versioning](https://semver.org/).
   keeps them on redirects that stay on facebook.com (https only).
 
 ### Security
+- tuon is now two programs. `tuon` is a small launcher (unlock, login browser, update) with none of the Messenger,
+  encryption or database libraries; `tuon-app` holds them and on macOS always runs in the sandbox. Login, setup,
+  history and relink now run inside the sandbox too. `tuon update` from 0.3.0 installs only the launcher; run
+  `tuon update` once more to get `tuon-app`. `tuon sandbox-test` also checks that the app can't start the launcher.
 - brotli 1.2.4 → 1.2.7 (GO-2026-6888) and klauspost/compress 1.20.0 → 1.20.2 (GO-2026-6865): both were reachable
   from Messenger's compressed HTTP responses.
 

@@ -47,7 +47,7 @@ cd tuon
 ./install.sh
 ```
 
-This builds `tuon` and its small Touch ID helper (`tuon-keyhelper`, which needs Apple's command line tools: `xcode-select --install`) into `~/.local/bin`, installs [Ghostty](https://ghostty.org) (the terminal that shows real photos) if you don't have it, then runs `tuon setup`.
+This builds `tuon`, its chat app `tuon-app` and its small Touch ID helper (`tuon-keyhelper`, which needs Apple's command line tools: `xcode-select --install`) into `~/.local/bin`, installs [Ghostty](https://ghostty.org) (the terminal that shows real photos) if you don't have it, then runs `tuon setup`.
 
 **Updating:** run `tuon update`. It downloads tuon fresh from GitHub into a temporary folder, installs the newest release tag signed by tuon's maintainer and skips anything unsigned, shows what changed, and asks before building if the update changes tuon's dependencies. Restart tuon afterwards if it was open.
 
@@ -57,6 +57,7 @@ This builds `tuon` and its small Touch ID helper (`tuon-keyhelper`, which needs 
 
 ```powershell
 go build -o tuon.exe ./cmd/tuon
+go build -o tuon-app.exe ./cmd/tuon-app
 .\tuon.exe
 ```
 
@@ -192,7 +193,7 @@ Everything in `~/.config/tuon` is readable only by you.
 ## Development
 
 ```sh
-CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags "-s -w -buildid=" -o bin/tuon ./cmd/tuon   # build (same flags as releases)
+for c in tuon tuon-app; do CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags "-s -w -buildid=" -o bin/$c ./cmd/$c; done   # build (same flags as releases)
 ./scripts/check.sh            # checksums, build, vet, tests, known vulnerabilities: run before every push
 ./scripts/deps-review.sh      # after changing a dependency (see DEPENDENCIES.md)
 ./scripts/release.sh v1.2.3   # build a signed tag for every platform, with SHA256SUMS
@@ -201,12 +202,14 @@ TUON_DOCS=docs/img go test ./internal/ui -run TestDocsScreenshots   # redraw the
 ```
 
 ```
-cmd/tuon/                       entry: launcher, login, setup, update, relink
+cmd/tuon/                       the small launcher: unlock, login browser, update (no Messenger code)
+cmd/tuon-app/                   the chat app (sandboxed on macOS): login, setup, history, relink
 cmd/tuon-keyhelper/             Swift helper for the Secure Enclave / Touch ID
 internal/vault/                 tuon's key: Touch ID or passphrase, encryption
 internal/keystore/              encrypted keys.db for encrypted-chat keys
 internal/sandbox/               macOS sandbox for the chat app
-internal/auth/                  the saved session, browser login
+internal/auth/                  the saved session
+internal/browserlogin/          the login browser window (used by the launcher)
 internal/connector/             what a chat platform must provide
 internal/connector/messenger/   Messenger through mautrix-meta and whatsmeow
 internal/store/                 SQLite: chats, folders, messages, reactions

@@ -10,7 +10,7 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/ralph/tuon/internal/store"
+	"github.com/ralph/tuon/internal/paths"
 )
 
 // releaseRepo is where releases come from. Updates never use a local
@@ -68,11 +68,13 @@ func update() error {
 	if err != nil {
 		return err
 	}
-	if tag == version {
+	app := filepath.Join(filepath.Dir(exe), appName())
+	_, appErr := os.Stat(app) // missing after an update by v0.3.0, which only built tuon
+	if tag == version && appErr == nil {
 		fmt.Printf("  Already up to date (%s).\n", tag)
 		return nil
 	}
-	if version != "dev" && newerTag(version, tag) {
+	if version != "dev" && newerTag(version, tag) && appErr == nil {
 		fmt.Printf("  This tuon (%s) is newer than the latest release (%s); nothing to do.\n", version, tag)
 		return nil
 	}
@@ -118,24 +120,14 @@ func update() error {
 	}
 
 	fmt.Println("  Building…")
-	tmp := exe + ".new"
-	build := goCmd(src, "build", "-trimpath", "-buildvcs=false", "-ldflags", releaseLDFlags(tag), "-o", tmp, "./cmd/tuon")
-	if out, err := build.CombinedOutput(); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("build failed:\n%s", indent(strings.TrimSpace(string(out))))
-	}
-	if runtime.GOOS == "windows" { // a running .exe can be renamed, not replaced
-		_ = os.Remove(exe + ".old")
-		if err := os.Rename(exe, exe+".old"); err != nil {
-			_ = os.Remove(tmp)
-			return err
-		}
-	}
-	if err := os.Rename(tmp, exe); err != nil {
-		_ = os.Remove(tmp)
+	// the chat app first: a new launcher must never run next to an old app
+	if err := buildInto(src, tag, "./cmd/tuon-app", app); err != nil {
 		return err
 	}
-	fmt.Printf("  Updated %s to %s.\n", exe, tag)
+	if err := buildInto(src, tag, "./cmd/tuon", exe); err != nil {
+		return err
+	}
+	fmt.Printf("  Updated %s and %s to %s.\n", exe, appName(), tag)
 	if runtime.GOOS == "darwin" { // the Touch ID helper lives next to tuon
 		helper := filepath.Join(filepath.Dir(exe), "tuon-keyhelper")
 		sw := exec.Command("swiftc", "-O", "cmd/tuon-keyhelper/main.swift", "-o", helper+".new")
@@ -147,10 +139,33 @@ func update() error {
 		}
 	}
 	// a tuon that's open keeps running the old version until it restarts
-	if release, err := store.Lock(); err == nil {
+	if release, err := paths.Lock(); err == nil {
 		release()
-	} else if errors.Is(err, store.ErrRunning) {
+	} else if errors.Is(err, paths.ErrRunning) {
 		fmt.Println("  tuon is open in another window: quit it and start it again to use the update.")
+	}
+	return nil
+}
+
+// buildInto builds pkg from the exported release and puts it at dst,
+// replacing what's there only once the build worked.
+func buildInto(src, tag, pkg, dst string) error {
+	tmp := dst + ".new"
+	build := goCmd(src, "build", "-trimpath", "-buildvcs=false", "-ldflags", releaseLDFlags(tag), "-o", tmp, pkg)
+	if out, err := build.CombinedOutput(); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("build of %s failed:\n%s", pkg, indent(strings.TrimSpace(string(out))))
+	}
+	if runtime.GOOS == "windows" { // a running .exe can be renamed, not replaced
+		_ = os.Remove(dst + ".old")
+		if err := os.Rename(dst, dst+".old"); err != nil && !os.IsNotExist(err) {
+			_ = os.Remove(tmp)
+			return err
+		}
+	}
+	if err := os.Rename(tmp, dst); err != nil {
+		_ = os.Remove(tmp)
+		return err
 	}
 	return nil
 }

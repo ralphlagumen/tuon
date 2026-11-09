@@ -22,13 +22,13 @@ Tuon logs in to Messenger as you, keeps your encryption keys, and shows text and
 
 ## The sandbox (macOS)
 
-While you chat, tuon runs inside a macOS sandbox that limits what it can touch on disk. It's a safety net for bugs and for code tuon processes from other people, **not yet a fence against a malicious dependency** (see "Limits"):
+tuon is two programs. `tuon`, the command you type, is a small launcher: it unlocks, opens the login browser, installs updates and starts `tuon-app`. `tuon-app` holds everything else (Messenger, encryption, the database and their libraries) and on macOS always runs inside a sandbox that limits what it can touch. The launcher contains none of those libraries, so none of their code runs outside the sandbox:
 
 - **It can't read the common secret stores:** SSH and cloud keys (`~/.ssh`, `~/.aws`, …), developer tokens (including `~/.claude`), keychains, browser profiles and cookies, password managers, other chat apps (Signal, Slack, Discord, WhatsApp, Telegram), other apps' private containers, shell and database histories, Mail and Messages. This is a list of known places, not everything private on your Mac: your documents stay readable, so you can attach them.
 - **It can only write** to its own folder, Downloads (files you save) and your own temp folder.
 - **It can only start a few programs:** the sound player, the clipboard tools, `open` (for photos and links), the FileVault check and its Touch ID helper. Shells and anything else are refused, and it can't script other apps (Apple Events). Network access stays open: Messenger needs it.
-- **Some commands run outside it:** logging in, `tuon setup`, `tuon history`, `tuon relink` and `tuon update`. The first four connect to Messenger and process messages unsandboxed.
-- `tuon sandbox-test` shows the file checks passing. `TUON_NO_SANDBOX=1 tuon` turns it off for troubleshooting. Linux and Windows don't have it yet.
+- **Everything that talks to Messenger runs inside it,** including `tuon setup`, `tuon login`, `tuon history` and `tuon relink`. Only the launcher's own jobs run outside: the Touch ID unlock, the login browser window (a browser can't run in the sandbox), and `tuon update`, which has to replace tuon's files. The chat app can't start the launcher.
+- `tuon sandbox-test` shows the checks passing. `TUON_NO_SANDBOX=1 tuon` turns it off for troubleshooting. Linux and Windows don't have it yet.
 
 ## Data on your computer
 
@@ -78,7 +78,7 @@ Keep FileVault (macOS) or BitLocker (Windows) on: it's what protects tuon's data
 - **Meta's terms.** Tuon uses Messenger the way Beeper does, through an unofficial route (mautrix-meta). Meta could ask you to verify your account or lock it.
 - **Linked device.** For encrypted chats, tuon registers as one of your devices. You can see and remove it in Messenger's security settings. If one contact's messages keep failing to decrypt (their phone kept outdated keys for tuon), `tuon relink` registers a fresh device; those messages still arrive meanwhile through your backup.
 - **Your computer.** The lock and encryption stop anyone holding a copy of your files, or a stolen laptop, from reading tuon's data. They don't stop malware already running as you: it could replace tuon or its Touch ID helper, run the helper itself to ask for your unlock, or watch your screen and keyboard. The helper's Touch ID prompt always reads "unlock tuon and your Messenger chats" (a caller can't change it), and tuon only uses the helper installed next to it. Approve that prompt only right after you started tuon or unlocked it yourself, and keep your computer clean and up to date.
-- **Dependencies.** Tuon's libraries start in the same program as the launcher, before the sandbox applies, and hold your key there. A malicious dependency would not be contained today. The defense is the review before updating them ([DEPENDENCIES.md](DEPENDENCIES.md)); a separate, minimal launcher is planned.
+- **Dependencies.** On macOS a malicious library in the chat app is held to what the sandbox allows, which is still a lot: your messages, tuon's key while it runs, and the network. The defense is the review before updating them ([DEPENDENCIES.md](DEPENDENCIES.md)). On Linux and Windows there's no sandbox yet, so the chat app runs with your full access.
 
 ## Use at your own risk
 

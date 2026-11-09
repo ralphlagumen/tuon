@@ -180,7 +180,7 @@ func setup() error {
 	if _, err := openVault(); err != nil { // a cancelled unlock isn't "not logged in"
 		return err
 	}
-	if _, err := loggedIn(); err != nil {
+	if _, err := loggedIn(); err != nil || pending != nil {
 		if err := login(); err != nil {
 			return err
 		}

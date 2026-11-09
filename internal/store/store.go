@@ -17,6 +17,7 @@ import (
 	_ "github.com/ncruces/go-sqlite3/vfs/adiantum"
 
 	"github.com/ralph/tuon/internal/connector"
+	"github.com/ralph/tuon/internal/paths"
 )
 
 type Space string
@@ -158,10 +159,10 @@ CREATE TABLE IF NOT EXISTS tuon_drafts (
 );`
 
 // Dir is ~/.config/tuon.
-func Dir() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".config", "tuon")
-}
+func Dir() string { return paths.Dir() }
+
+// Lock makes sure only one tuon uses the data folder at a time (see paths.Lock).
+func Lock() (release func(), err error) { return paths.Lock() }
 
 // Open opens ~/.config/tuon/tuon.db, encrypted with key (32 bytes, from
 // tuon's vault). A plain tuon.db from an older version is converted.
@@ -1218,4 +1219,4 @@ GROUP BY c.id HAVING COUNT(*) = 1 AND MIN(p.user_id) <> c.id`, s.Self)
 }
 
 // ErrRunning means another tuon already has the data folder open.
-var ErrRunning = errors.New("tuon is already running in another window; use that one, or quit it first")
+var ErrRunning = paths.ErrRunning
