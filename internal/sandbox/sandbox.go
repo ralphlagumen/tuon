@@ -68,6 +68,8 @@ var denyRead = []string{
 	"Library/Application Support/1Password", "Library/Application Support/Bitwarden",
 	"Library/Application Support/Signal", "Library/Application Support/Slack",
 	"Library/Application Support/discord", "Library/Application Support/Telegram Desktop",
+	// the launcher's own folder: the login window's kept browser profile, updates
+	"Library/Caches/tuon",
 	"Library/Application Support/WhatsApp", "Library/Application Support/Caprine",
 }
 

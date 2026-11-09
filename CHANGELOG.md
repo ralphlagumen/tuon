@@ -5,6 +5,11 @@ and versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed (login)
+- The login window keeps its own browser profile (in `~/Library/Caches/tuon`) instead of a fresh one each time, so
+  Facebook recognizes the device and a password manager extension you add there stays. tuon only takes the session
+  once Messenger has opened in the window (not mid 2-factor). `tuon logout` deletes the profile.
+
 ### Fixed
 - `tuon logout` works inside the sandbox again (it stopped at a keychain error before `--wipe`).
 - Login loop: right after logging in, tuon said "Messenger logged you out" again. Facebook now redirects

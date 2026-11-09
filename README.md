@@ -71,7 +71,7 @@ go build -o tuon-app.exe ./cmd/tuon-app
 | 2. Email and password | Typed into Tuon. This is the Messenger app's own login, and it asks for a 2-factor code if your account needs one. |
 | 3. Paste cookies | For when the other two don't work. |
 
-The browser window uses a separate, temporary profile, so your usual browser and its logins aren't touched. Tuon never stores your password, only the session Meta gives back, encrypted with tuon's own key.
+The browser window uses tuon's own profile, so your usual browser and its logins aren't touched. That profile is kept between logins, so Facebook recognizes the device and you can add your password manager's extension to it once; `tuon logout` deletes it. Tuon never stores your password, only the session Meta gives back, encrypted with tuon's own key.
 
 Encrypted chats start empty on a new device, so right after you log in, setup asks for your 6-digit Messenger PIN to load their older messages (typed or pasted). You can skip it and run `tuon history` later, with tuon closed.
 

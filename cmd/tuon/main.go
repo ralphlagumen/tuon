@@ -106,6 +106,9 @@ func launch(app string, args []string) int {
 			fmt.Fprintln(os.Stderr, "tuon:", err)
 			return 1
 		}
+		if code == 0 && len(args) > 0 && args[0] == "logout" {
+			forgetBrowser() // the login window's profile holds a Facebook login too
+		}
 		if code != sandbox.ExitBrowserLogin {
 			return code
 		}
@@ -130,6 +133,16 @@ func needsKey(args []string) bool {
 	return false
 }
 
+// forgetBrowser deletes the login window's kept profile (the sandboxed
+// app can't: it's outside what the app may write).
+func forgetBrowser() {
+	if base := paths.WorkBase(); base != "" {
+		if err := os.RemoveAll(filepath.Join(base, browserlogin.ProfileName)); err == nil {
+			fmt.Println("  Deleted the login window's browser profile.")
+		}
+	}
+}
+
 // runPlain runs the app without a sandbox (other systems, or turned off):
 // it then unlocks and logs in by itself.
 func runPlain(app string, args []string, why string) int {
@@ -143,6 +156,9 @@ func runPlain(app string, args []string, why string) int {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "tuon:", err)
 		return 1
+	}
+	if code == 0 && len(args) > 0 && args[0] == "logout" {
+		forgetBrowser()
 	}
 	return code
 }
@@ -244,8 +260,8 @@ func browserLogin() ([]byte, error) {
   A browser window is opening at Facebook's login page (Messenger uses
   your Facebook account). Check the address bar shows
   https://www.facebook.com with a padlock, then log in like you normally
-  would. It's a separate, temporary window: your usual browser and its
-  logins aren't touched. When you're in, tuon picks up your session and
+  would. It's tuon's own window: your usual browser and its logins aren't
+  touched. When Messenger opens there, tuon picks up your session and
   closes the window.
 
   Waiting for you to log in…
@@ -255,6 +271,14 @@ func browserLogin() ([]byte, error) {
 	base := paths.WorkBase() // a folder the sandboxed app can't write
 	if err := os.MkdirAll(base, 0o700); err != nil {
 		return nil, err
+	}
+	if _, err := os.Stat(filepath.Join(base, browserlogin.ProfileName)); os.IsNotExist(err) {
+		fmt.Print(`
+  This login window keeps its own browser profile (in ~/Library/Caches/tuon),
+  separate from your usual browser. Facebook then knows this device next
+  time, and anything you add to it stays: if you use a password manager,
+  install its browser extension in this window once. tuon logout deletes it.
+`)
 	}
 	cookies, err := browserlogin.Login(ctx, browser, base)
 	if err != nil {

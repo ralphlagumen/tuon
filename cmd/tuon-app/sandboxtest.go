@@ -71,6 +71,7 @@ func sandboxTest() int {
 	if base := paths.WorkBase(); base != "" { // the launcher's update and login folders
 		_ = os.MkdirAll(base, 0o700) // refused in here; the launcher makes it
 		check("write ~/Library/Caches/tuon (update, login)", false, write(filepath.Join(base, "sandbox-probe")))
+		check("read ~/Library/Caches/tuon (login browser)", false, read(base))
 	}
 	run := func(name string, args ...string) error { return exec.Command(name, args...).Run() }
 	check("start /bin/sh", false, run("/bin/sh", "-c", "true"))

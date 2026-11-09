@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -80,18 +81,21 @@ const Platform = "facebook"
 // valid: the cookies of a logged-in session.
 func valid(c map[string]string) bool { return c["c_user"] != "" && c["xs"] != "" }
 
-// Login opens the login window and waits until you've logged in, then
-// returns the window's facebook.com cookies. The throwaway profile goes in
-// base (the temp folder if empty): the launcher passes a folder the
-// sandboxed app can't write, so it can't tamper with the browser.
+// ProfileName is the login window's own Chrome profile, kept in the folder
+// passed to Login. Keeping it means Facebook knows this device (no new
+// verification on every login) and a password manager extension you add
+// there stays.
+const ProfileName = "browser"
+
+// Login opens the login window and waits until you've logged in and
+// Messenger has opened, then returns the window's facebook.com cookies.
+// The window uses its own profile in base/ProfileName, kept between logins;
+// the launcher passes a folder the sandboxed app can't write.
 func Login(ctx context.Context, browser, base string) (map[string]string, error) {
-	if base == "" {
-		base = os.TempDir()
-	}
 	removeStaleProfiles(base)
-	removeStaleProfiles(os.TempDir()) // where older versions put them
-	profile, err := os.MkdirTemp(base, "tuon-login-")
-	if err != nil {
+	removeStaleProfiles(os.TempDir()) // where older versions put throwaway profiles
+	profile := filepath.Join(base, ProfileName)
+	if err := os.MkdirAll(profile, 0o700); err != nil {
 		return nil, err
 	}
 	cmd, dt, err := startBrowser(browser, profile,
@@ -100,28 +104,30 @@ func Login(ctx context.Context, browser, base string) (map[string]string, error)
 		// https://www.facebook.com before typing anything
 		"--new-window", loginURL)
 	if err != nil {
-		_ = os.RemoveAll(profile)
 		return nil, fmt.Errorf("couldn't open the login window: %w", err)
 	}
 	exited := make(chan struct{})
 	go func() { _ = cmd.Wait(); close(exited) }()
+	id := 0
+	next := func() int { id++; return id }
 	defer func() {
-		// close the window, wait for it to let go of its files, then delete
-		// the throwaway profile (and its cookies)
-		dt.close()
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
-		}
+		// close the window the normal way so the profile saves its state,
+		// then make sure it's gone
+		_ = dt.send(next(), "Browser.close")
 		select {
 		case <-exited:
 		case <-time.After(5 * time.Second):
+			if cmd.Process != nil {
+				_ = cmd.Process.Kill()
+			}
+			<-exited
 		}
-		_ = os.RemoveAll(profile)
+		dt.close()
 	}()
 
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
-	for id := 1; ; id += 3 {
+	for {
 		select {
 		case <-ctx.Done():
 			return nil, errors.New("login timed out")
@@ -129,20 +135,40 @@ func Login(ctx context.Context, browser, base string) (map[string]string, error)
 			return nil, errors.New("the login window was closed before you logged in")
 		case <-tick.C:
 		}
-		cookies, err := dt.cookies(ctx, id)
-		if err != nil {
-			continue // the window may be busy loading; try again
+		// only once the window shows Messenger: before that, a kept profile
+		// may still hold an old session's cookies, and a 2-factor step
+		// may not be done yet
+		urls, err := dt.pageURLs(ctx, next())
+		if err != nil || !anyLoggedIn(urls) {
+			continue
 		}
-		if valid(cookies) {
-			// give Messenger a moment to set its remaining cookies
-			time.Sleep(1500 * time.Millisecond)
-			if more, err := dt.cookies(ctx, id+1); err == nil && valid(more) {
-				cookies = more
-			}
-			_ = dt.send(id+2, "Browser.close")
-			return cookies, nil
+		c, err := dt.cookies(ctx, next())
+		if err != nil || !valid(c) {
+			continue
+		}
+		// give Messenger a moment to set its remaining cookies
+		time.Sleep(1500 * time.Millisecond)
+		if more, err := dt.cookies(ctx, next()); err == nil && valid(more) {
+			c = more
+		}
+		return c, nil
+	}
+}
+
+// anyLoggedIn: some tab shows Messenger on facebook.com, which Facebook
+// only does for a logged-in session (login, checkpoints and 2-factor steps
+// are other pages).
+func anyLoggedIn(urls []string) bool {
+	for _, raw := range urls {
+		u, err := url.Parse(raw)
+		if err != nil || u.Scheme != "https" || !isFacebookDomain(u.Hostname()) {
+			continue
+		}
+		if u.Path == "/messages" || strings.HasPrefix(u.Path, "/messages/") {
+			return true
 		}
 	}
+	return false
 }
 
 // startBrowser starts a Chrome-type browser on a throwaway profile, talking
@@ -203,9 +229,57 @@ func (d *devPipe) send(id int, method string) error {
 	return err
 }
 
+// pageURLs lists the addresses of the window's tabs.
+func (d *devPipe) pageURLs(ctx context.Context, id int) ([]string, error) {
+	b, err := d.call(ctx, id, "Target.getTargets")
+	if err != nil {
+		return nil, err
+	}
+	var resp struct {
+		Result struct {
+			TargetInfos []struct{ Type, URL string } `json:"targetInfos"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(b, &resp); err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, t := range resp.Result.TargetInfos {
+		if t.Type == "page" {
+			out = append(out, t.URL)
+		}
+	}
+	return out, nil
+}
+
 // cookies asks the window for its facebook.com cookies.
 func (d *devPipe) cookies(ctx context.Context, id int) (map[string]string, error) {
-	if err := d.send(id, "Storage.getCookies"); err != nil {
+	b, err := d.call(ctx, id, "Storage.getCookies")
+	if err != nil {
+		return nil, err
+	}
+	var resp struct {
+		Result struct {
+			Cookies []struct {
+				Name, Value, Domain string
+			} `json:"cookies"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(b, &resp); err != nil {
+		return nil, err
+	}
+	out := map[string]string{}
+	for _, c := range resp.Result.Cookies {
+		if isFacebookDomain(c.Domain) {
+			out[c.Name] = c.Value
+		}
+	}
+	return out, nil
+}
+
+// call sends one DevTools command and returns its reply.
+func (d *devPipe) call(ctx context.Context, id int, method string) ([]byte, error) {
+	if err := d.send(id, method); err != nil {
 		return nil, err
 	}
 	timeout := time.After(5 * time.Second)
@@ -223,23 +297,12 @@ func (d *devPipe) cookies(ctx context.Context, id int) (map[string]string, error
 			return nil, ctx.Err()
 		}
 		var resp struct {
-			ID     int `json:"id"`
-			Result struct {
-				Cookies []struct {
-					Name, Value, Domain string
-				} `json:"cookies"`
-			} `json:"result"`
+			ID int `json:"id"`
 		}
 		if json.Unmarshal(b, &resp) != nil || resp.ID != id {
 			continue // events or other replies
 		}
-		out := map[string]string{}
-		for _, c := range resp.Result.Cookies {
-			if isFacebookDomain(c.Domain) {
-				out[c.Name] = c.Value
-			}
-		}
-		return out, nil
+		return b, nil
 	}
 }
 

@@ -54,6 +54,14 @@ func TestBrowserWindowMechanics(t *testing.T) {
 		t.Fatal("read no facebook.com cookies")
 	}
 	t.Logf("read facebook.com cookies from the window: %v (not logged in, as expected)", names)
+	urls, err := dt.pageURLs(ctx, 100)
+	if err != nil || len(urls) == 0 {
+		t.Fatalf("tab addresses: %v %v", urls, err)
+	}
+	if anyLoggedIn(urls) {
+		t.Fatalf("a fresh profile must not count as logged in: %v", urls)
+	}
+	t.Logf("tabs: %v", urls)
 }
 
 func TestRemoveStaleProfiles(t *testing.T) {
@@ -86,6 +94,29 @@ func TestIsFacebookDomain(t *testing.T) {
 	} {
 		if got := isFacebookDomain(d); got != want {
 			t.Errorf("isFacebookDomain(%q) = %v", d, got)
+		}
+	}
+}
+
+func TestAnyLoggedIn(t *testing.T) {
+	for _, c := range []struct {
+		urls []string
+		want bool
+	}{
+		{[]string{"https://www.facebook.com/messages/"}, true},
+		{[]string{"https://web.facebook.com/messages/e2ee/t/123/"}, true},
+		{[]string{"https://web.facebook.com/messages?_rdc=1&_rdr"}, true},
+		{[]string{"https://www.facebook.com/login/?next=https%3A%2F%2Fwww.facebook.com%2Fmessages%2F"}, false},
+		{[]string{"https://www.facebook.com/checkpoint/?next=/messages/"}, false},
+		{[]string{"https://www.facebook.com/two_step_verification/two_factor/"}, false},
+		{[]string{"http://www.facebook.com/messages/"}, false},
+		{[]string{"https://evilfacebook.com/messages/"}, false},
+		{[]string{"https://www.facebook.com/messagesx"}, false},
+		{[]string{"about:blank", "https://www.facebook.com/messages/t/1"}, true},
+		{nil, false},
+	} {
+		if got := anyLoggedIn(c.urls); got != c.want {
+			t.Errorf("anyLoggedIn(%v) = %v", c.urls, got)
 		}
 	}
 }

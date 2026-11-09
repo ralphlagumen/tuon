@@ -19,6 +19,7 @@ import (
 	"github.com/ralph/tuon/internal/browserlogin"
 	"github.com/ralph/tuon/internal/connector/messenger"
 	"github.com/ralph/tuon/internal/keystore"
+	"github.com/ralph/tuon/internal/paths"
 	"github.com/ralph/tuon/internal/sandbox"
 	"github.com/ralph/tuon/internal/store"
 )
@@ -144,15 +145,19 @@ func browserLogin(browser string) (auth.Creds, error) {
   A browser window is opening at Facebook's login page (Messenger uses
   your Facebook account). Check the address bar shows
   https://www.facebook.com with a padlock, then log in like you normally
-  would. It's a separate, temporary window: your usual browser and its
-  logins aren't touched. When you're in, tuon picks up your session and
+  would. It's tuon's own window: your usual browser and its logins aren't
+  touched. When Messenger opens there, tuon picks up your session and
   closes the window.
 
   Waiting for you to log in…
 `)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
-	cookies, err := browserlogin.Login(ctx, browser, "") // only without a sandbox: the temp folder is fine
+	base := paths.WorkBase() // only without a sandbox; with one, the launcher runs the browser
+	if err := os.MkdirAll(base, 0o700); err != nil {
+		return auth.Creds{}, err
+	}
+	cookies, err := browserlogin.Login(ctx, browser, base)
 	return auth.Creds{Platform: browserlogin.Platform, Cookies: cookies}, err
 }
 
