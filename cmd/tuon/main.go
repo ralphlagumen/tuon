@@ -256,18 +256,6 @@ func browserLogin() ([]byte, error) {
 	if browser == "" {
 		return nil, errors.New("no Chrome-type browser found: run `tuon login` and choose another way")
 	}
-	fmt.Print(`
-  A browser window is opening at Facebook's login page (Messenger uses
-  your Facebook account). Check the address bar shows
-  https://www.facebook.com with a padlock, then log in like you normally
-  would. It's tuon's own window: your usual browser and its logins aren't
-  touched. When Messenger opens there, tuon picks up your session and
-  closes the window.
-
-  Waiting for you to log in…
-`)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
 	base := paths.WorkBase() // a folder the sandboxed app can't write
 	if err := os.MkdirAll(base, 0o700); err != nil {
 		return nil, err
@@ -280,6 +268,18 @@ func browserLogin() ([]byte, error) {
   install its browser extension in this window once. tuon logout deletes it.
 `)
 	}
+	fmt.Print(`
+  A browser window is opening at Facebook's login page (Messenger uses
+  your Facebook account). Check the address bar shows
+  https://www.facebook.com with a padlock, then log in like you normally
+  would. It's tuon's own window: your usual browser and its logins aren't
+  touched. When Messenger opens there, tuon picks up your session and
+  closes the window.
+
+  Waiting for you to log in…
+`)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
 	cookies, err := browserlogin.Login(ctx, browser, base)
 	if err != nil {
 		return nil, err
