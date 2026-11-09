@@ -1127,6 +1127,13 @@ func (c *Conn) SendFile(ctx context.Context, chatID string, file connector.Attac
 		}
 		fbid := resp.Payload.RealMetadata.GetFbId()
 		if fbid == 0 {
+			// a field messagix doesn't know yet: take any other ID in the reply
+			var keys []string
+			fbid, keys = uploadID(resp.Payload.Metadata)
+			c.log.Warn().Strs("metadata_keys", keys).Str("mime", file.Mime).Int64("found_id", fbid).
+				Msg("upload reply had no known file ID field")
+		}
+		if fbid == 0 {
 			return errors.New("upload: Messenger didn't return a file ID")
 		}
 		_, err = c.cli.ExecuteTasks(ctx, &socket.SendMessageTask{
