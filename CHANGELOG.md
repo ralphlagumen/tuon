@@ -17,6 +17,7 @@ and versions follow [Semantic Versioning](https://semver.org/).
 - First run asks for Touch ID (or a new passphrase) once: the launcher sets up the lock and hands the key over.
 
 ### Fixed
+- Scrolling fast no longer types `[<65;…M` into the message box: Bubble Tea read a burst of mouse reports 256 bytes at a time and turned a cut-off one into text. tuon's input now never hands it half a report.
 - Sending a file Messenger refuses (such as a .zip in a chat that isn't end-to-end encrypted) now says so, instead of "Messenger didn't return a file ID".
 - `tuon history` no longer prints "zerolog: could not write event … file already closed" as it exits.
 - `tuon logout` works inside the sandbox again (it stopped at a keychain error before `--wipe`).

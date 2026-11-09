@@ -11,18 +11,36 @@ import (
 	"github.com/ralph/tuon/internal/seq"
 )
 
-// ttyIn is the terminal input Bubble Tea reads. Bubble Tea treats a read
-// that doesn't fill its buffer as complete, so a mouse-wheel report cut in
-// two by a burst of scrolling turned into typed text ("[<65;81;48M"). A
-// read that ends inside an escape sequence or a character waits up to
-// 25 ms for the rest. It never keeps bytes between reads, so Bubble Tea's
-// own wait for input (on the file descriptor) stays right. It stays a
-// file (Fd) so Bubble Tea still puts the terminal in raw mode.
-type ttyIn struct{ *os.File }
+// ttyIn is the terminal input Bubble Tea reads. Bubble Tea (v1.3) reads
+// 256 bytes at a time and, when a read ends inside a mouse report, types
+// the rest of it as text ("[<65;81;48M" while scrolling fast: a burst is
+// many reports, more than 256 bytes). So a read never ends inside an
+// escape sequence or a character:
+//   - a full read that ends mid-sequence returns only the complete part
+//     and keeps the tail for the next read (the rest of the sequence is
+//     already waiting, so that read comes at once);
+//   - a short one waits up to 25 ms for the rest (a lone Esc is a key).
+//
+// It stays a file (Fd) so Bubble Tea still puts the terminal in raw mode.
+type ttyIn struct {
+	*os.File
+	tail []byte
+}
 
-func (t ttyIn) Read(p []byte) (int, error) {
-	n, err := t.File.Read(p)
-	for err == nil && n > 0 && n < len(p) && seq.CompleteLen(p[:n]) < n {
+func (t *ttyIn) Read(p []byte) (n int, err error) {
+	n = copy(p, t.tail)
+	t.tail = t.tail[:0]
+	m, err := t.File.Read(p[n:])
+	n += m
+	for err == nil && n > 0 && seq.CompleteLen(p[:n]) < n {
+		if n == len(p) { // full: keep the cut-off tail for next time
+			k := seq.CompleteLen(p[:n])
+			if k == 0 {
+				break // one huge sequence: hand it over as it is
+			}
+			t.tail = append(t.tail, p[k:n]...)
+			return k, nil
+		}
 		fds := []unix.PollFd{{Fd: int32(t.Fd()), Events: unix.POLLIN}}
 		if k, perr := unix.Poll(fds, 25); perr != nil || k == 0 {
 			break // nothing more: a lone Esc, say
@@ -37,4 +55,4 @@ func (t ttyIn) Read(p []byte) (int, error) {
 }
 
 // appInput is what Bubble Tea reads keys and mouse events from.
-func appInput() io.Reader { return ttyIn{os.Stdin} }
+func appInput() io.Reader { return &ttyIn{File: os.Stdin} }
