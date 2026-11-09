@@ -25,10 +25,13 @@ import (
 // Tuon talks to that window over a private pipe (no network port), which
 // closes with the window.
 
-// Facebook's login page: the same account as Messenger, and steadier than
+// Messenger on facebook.com: the same account, and steadier than
 // messenger.com's own web login (which often fails with "Your request
-// couldn't be processed").
-const loginURL = "https://www.facebook.com/login/?next=https%3A%2F%2Fwww.facebook.com%2Fmessages%2F"
+// couldn't be processed"). Logged out, Facebook shows its login page and
+// comes back here; still logged in (the kept profile), it opens straight
+// away. Opening /login/ instead made Facebook ask for the password again
+// even with a valid session.
+const loginURL = "https://www.facebook.com/messages/"
 
 // FindBrowser returns a Chrome-type browser that can run the login window.
 func FindBrowser() string {
