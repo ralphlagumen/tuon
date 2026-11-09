@@ -5,12 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
-	"github.com/rs/zerolog"
-	zlog "github.com/rs/zerolog/log"
 	"golang.org/x/term"
 
 	"github.com/ralph/tuon/internal/connector"
@@ -42,14 +39,10 @@ func history() error {
 	if kdb != nil {
 		defer kdb.Close()
 	}
-	logFile, err := os.OpenFile(filepath.Join(store.Dir(), "tuon.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	log, err := openLog()
 	if err != nil {
 		return err
 	}
-	defer logFile.Close()
-	zerolog.SetGlobalLevel(zerolog.WarnLevel)
-	log := zerolog.New(logFile).With().Timestamp().Logger()
-	zlog.Logger = log
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()

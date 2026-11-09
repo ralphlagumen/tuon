@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -94,6 +95,36 @@ func main() {
 	}
 }
 
+// openLog opens tuon.log once per run and keeps it open until tuon exits:
+// Messenger's background work still logs while it shuts down, after the
+// command that started it has returned. Logs go to a file so they never
+// draw over the UI.
+func openLog() (zerolog.Logger, error) {
+	logOnce.Do(func() {
+		logPath := filepath.Join(store.Dir(), "tuon.log")
+		trimLog(logPath)
+		f, err := safefile.Append(logPath, 0o600)
+		if err != nil {
+			logErr = err
+			return
+		}
+		level := zerolog.WarnLevel
+		if os.Getenv("TUON_DEBUG") != "" {
+			level = zerolog.DebugLevel // may log message details: only for troubleshooting
+		}
+		zerolog.SetGlobalLevel(level)
+		logger = zerolog.New(f).With().Timestamp().Logger()
+		zlog.Logger = logger // messagix also logs through the global logger
+	})
+	return logger, logErr
+}
+
+var (
+	logOnce sync.Once
+	logger  zerolog.Logger
+	logErr  error
+)
+
 func fail(err error) {
 	fmt.Fprintln(os.Stderr, "tuon:", err)
 	os.Exit(1)
@@ -128,21 +159,10 @@ func run() error {
 	_, _ = st.Compact()
 	removeRetired()
 
-	// Logs go to a file so they never draw over the UI.
-	logPath := filepath.Join(store.Dir(), "tuon.log")
-	trimLog(logPath)
-	logFile, err := safefile.Append(logPath, 0o600)
+	log, err := openLog()
 	if err != nil {
 		return err
 	}
-	defer logFile.Close()
-	level := zerolog.WarnLevel
-	if os.Getenv("TUON_DEBUG") != "" {
-		level = zerolog.DebugLevel // may log message details: only for troubleshooting
-	}
-	zerolog.SetGlobalLevel(level)
-	log := zerolog.New(logFile).With().Timestamp().Logger()
-	zlog.Logger = log // messagix also logs through the global logger
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
