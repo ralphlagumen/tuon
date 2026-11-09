@@ -124,6 +124,7 @@ type Model struct {
 	sugg      []suggestion        // @ pop-up: people or files
 	atts      []pendingFile       // files in the draft, shown as [Image #n] tokens
 	replyTo   *store.MessageRow   // the message the draft replies to
+	escAt     time.Time           // first esc on a non-empty box: a second one soon clears it
 	dragFrom  int                 // mouse drag over messages (copy); -1 = none
 	dragTo    int
 	suggIdx   int
@@ -1049,6 +1050,19 @@ func (m Model) onComposeKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.replyTo = nil
 			return m, nil
 		}
+		// esc twice clears the box (like Claude Code); tab, or esc on an
+		// empty box, goes back to the chats keeping the draft
+		if k.String() == "esc" && (m.compose.Value() != "" || len(m.atts) > 0) {
+			if !m.escAt.IsZero() && time.Since(m.escAt) < 1500*time.Millisecond {
+				m.escAt = time.Time{}
+				m.compose.SetValue("")
+				m.atts = nil
+				return m, m.flash("cleared")
+			}
+			m.escAt = time.Now()
+			return m, m.flash("esc again to clear · tab keeps it and goes back")
+		}
+		m.escAt = time.Time{}
 		m.leaveChat()
 		return m, nil
 	case "up":

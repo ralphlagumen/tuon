@@ -296,11 +296,22 @@ func TestFlow(t *testing.T) {
 		t.Fatalf("sent = %+v", fc.sent)
 	}
 
-	// Draft kept when leaving: type, esc to list, come back.
-	m = typeText(m, "draft")
+	// Esc twice clears the box; esc once only warns.
+	m = typeText(m, "oops")
 	m = key(m, "esc")
+	if !m.composing() || m.compose.Value() != "oops" {
+		t.Fatalf("one esc on a non-empty box should stay and keep it: %q", m.compose.Value())
+	}
+	m = key(m, "esc")
+	if !m.composing() || m.compose.Value() != "" {
+		t.Fatalf("esc esc should clear the box: %q", m.compose.Value())
+	}
+
+	// Draft kept when leaving: type, tab to list, come back.
+	m = typeText(m, "draft")
+	m = key(m, "tab")
 	if m.focus != focusList || m.chat == nil {
-		t.Fatal("esc should focus the list and keep the chat showing")
+		t.Fatal("tab should focus the list and keep the chat showing")
 	}
 	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = run(next.(Model), cmd)

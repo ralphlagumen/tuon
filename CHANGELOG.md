@@ -6,6 +6,7 @@ and versions follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- `esc` `esc` clears the message box, like in Claude Code. One `esc` with text in the box only warns; `tab` goes back to the chats keeping the draft (and `esc` still does on an empty box).
 - `tuon version` shows which release you have (`dev` for a build that isn't a release tag).
 
 ### Changed (login)

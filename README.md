@@ -109,7 +109,8 @@ The chat list is on the left and the open chat on the right. Press `?` in Tuon f
 | `ctrl+v` | Paste an image, or a file copied in Finder |
 | `ctrl+o` | Open the newest photo |
 | `↑` on an empty box | Step into the messages |
-| `esc` | Back to the chat list, keeping your draft (drafts are kept when you quit too) |
+| `esc` `esc` | Clear the box (one `esc` on an empty box goes back to the chat list) |
+| `tab` | Back to the chat list, keeping your draft (drafts are kept when you quit too) |
 
 With a message selected:
 
