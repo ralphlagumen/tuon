@@ -196,6 +196,7 @@ func (c *Conn) Start(ctx context.Context) error {
 	}
 
 	c.cli = messagix.NewClient(ck, c.log, &messagix.Config{})
+	keepCookiesOnRedirect(c.cli.GetHTTP().GetHTTPClient())
 	user, tbl, err := c.cli.LoadMessagesPage(c.ctx)
 	if err != nil {
 		if isLoggedOut(err) {
