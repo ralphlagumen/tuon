@@ -5,53 +5,55 @@ and versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-09
+
+**Upgrading from 0.3.0:** run `tuon update` twice. The first run installs the new launcher; the second adds the chat
+app (`tuon-app`) next to it.
+
 ### Added
-- Read receipts: a chat you open in tuon is marked read on Messenger, so your phone and the web show it read (people see "Seen"). `:seen off` (`:r off`) turns it off.
-- `esc` `esc` clears the message box, like in Claude Code. One `esc` with text in the box only warns; `tab` goes back to the chats keeping the draft (and `esc` still does on an empty box).
+- Read receipts: a chat you open in tuon is marked read on Messenger, so your phone and the web show it read (people
+  see "Seen"). `:seen off` (`:r off`) turns it off.
+- `esc` `esc` clears the message box. One `esc` with text in the box only warns; `tab` goes back to the chats keeping
+  the draft (`esc` still does on an empty box).
 - `tuon version` shows which release you have (`dev` for a build that isn't a release tag).
 
-### Changed (login)
+### Changed
 - The login window keeps its own browser profile (in `~/Library/Caches/tuon`) instead of a fresh one each time, so
-  Facebook recognizes the device and a password manager extension you add there stays. tuon only takes the session
-  once Messenger has opened in the window (not mid 2-factor). `tuon logout` deletes the profile. Still logged in
-  there, the window opens and closes by itself: nothing to type.
+  Facebook recognizes the device and a password manager extension you add there stays. Still logged in there, the
+  window opens and closes by itself. tuon only takes the session once Messenger has opened in the window (never mid
+  2-factor), and `tuon logout` deletes the profile.
 - `tuon login` opens tuon when it's done.
 - First run asks for Touch ID (or a new passphrase) once: the launcher sets up the lock and hands the key over.
+- New logo: an open enso ring shaped like a chat bubble, with a dot at its centre; the header reads `tuʘn`.
+- Releases, `install.sh` and `tuon update` build with the same settings, so an updated tuon matches the published
+  `SHA256SUMS`.
 
 ### Fixed
-- Scrolling fast no longer types `[<65;…M` into the message box: Bubble Tea read a burst of mouse reports 256 bytes at a time and turned a cut-off one into text. tuon's input now never hands it half a report.
-- Sending a file Messenger refuses (such as a .zip in a chat that isn't end-to-end encrypted) now says so, instead of "Messenger didn't return a file ID".
-- `tuon history` no longer prints "zerolog: could not write event … file already closed" as it exits.
-- `tuon logout` works inside the sandbox again (it stopped at a keychain error before `--wipe`).
 - Login loop: right after logging in, tuon said "Messenger logged you out" again. Facebook now redirects
-  `www.facebook.com/messages` to `web.facebook.com`, and the login cookies were dropped on that redirect. tuon now
-  keeps them on redirects that stay on facebook.com (https only).
+  `www.facebook.com/messages` to `web.facebook.com`, and the login cookies were dropped on that redirect.
+- Scrolling fast, or pressing `esc` while a scroll still coasts, no longer types `[<65;…M` into the message box.
+- Sending a file Messenger refuses (such as a .zip in a chat that isn't end-to-end encrypted) says so, instead of
+  "Messenger didn't return a file ID".
+- `tuon history` no longer prints "zerolog: could not write event … file already closed".
+- `tuon logout` works inside the sandbox.
 
 ### Security
 - tuon is now two programs. `tuon` is a small launcher (unlock, login browser, update) with none of the Messenger,
-  encryption or database libraries; `tuon-app` holds them and on macOS always runs in the sandbox, so their code no
-  longer starts outside it. Login, setup, history and relink now run inside the sandbox too. The sandbox still has
-  known gap (a copy of the app that starts its own session can outlive it; see SECURITY.md).
-- `tuon update` and the login browser work in `~/Library/Caches/tuon`, which the sandboxed app can't write, so it
-  can't change what an update builds or the browser's profile. Go's, git's and swiftc's temp files go there too. `tuon update` from 0.3.0 installs only the launcher; run
-  `tuon update` once more to get `tuon-app`. `tuon sandbox-test` also checks that the app can't start the launcher.
+  encryption or database libraries; `tuon-app` holds them and on macOS always runs in the sandbox, so their code never
+  starts outside it. Login, setup, history and relink run inside the sandbox too.
 - The sandboxed app can no longer start `open` or `osascript`: both could ask macOS to start a program outside the
-  sandbox (shown with a probe app; `tuon sandbox-test` now checks both). The launcher opens links, photos (in
-  Preview only) and saved files (shown in Finder) and reads pasted images and files for it, checking each request.
+  sandbox (shown with a probe app). The launcher opens links, photos (in Preview only) and saved files (shown in
+  Finder) and reads pasted images and files for it, checking each request.
+- `tuon update` and the login browser work in `~/Library/Caches/tuon`, which the sandboxed app can neither read nor
+  write; the build tools' temp files go there too.
 - The chat app runs on a terminal of its own, which the launcher relays to yours, so it can't type into your shell
   after tuon quits (TIOCSTI). When it exits, the launcher stops anything it left running in its session.
-- Smaller hardening: Argon2 settings in `vault.json` are bounded (a planted file can't crash the launcher); the lock
-  file is never opened through a link; an inherited `TUON_SANDBOXED` can't switch the sandbox off, and tuon always
-  says when it runs unsandboxed (also when `tuon-app` is started directly); the launcher's dependency test is an
-  allowlist; a `tuon update` from a build made from source asks before installing a release.
-- brotli 1.2.4 → 1.2.7 (GO-2026-6888) and klauspost/compress 1.20.0 → 1.20.2 (GO-2026-6865): both were reachable
-  from Messenger's compressed HTTP responses.
-
-### Changed
-- New logo: an open enso ring shaped like a chat bubble, with a dot at its centre.
-- The header shows the logo in the name: `tuʘn`.
-- Releases, `install.sh` and `tuon update` build with the same settings (`CGO_ENABLED=0`, `-buildvcs=false`), so an
-  updated tuon matches the published `SHA256SUMS`.
+- `tuon sandbox-test` checks all of the above (33 checks), including escape probes through `open` and `osascript`.
+- Smaller hardening: bounded Argon2 settings in `vault.json`, no lock file through links, no switching the sandbox off
+  through an inherited environment variable (and tuon always says when it runs unsandboxed), an allowlist for the
+  launcher's dependencies, and a build made from source asks before `tuon update` installs a release.
+- brotli 1.2.4 → 1.2.7 (GO-2026-6888) and klauspost/compress 1.20.0 → 1.20.2 (GO-2026-6865).
+- Known gap: a copy of the app that starts its own session can outlive tuon (still sandboxed); see SECURITY.md.
 
 ## [0.3.0] - 2026-11-06
 
@@ -100,6 +102,7 @@ First release.
 - `:previews off` for shoulder-surfing.
 - `tuon update` (signed release tags only) and `tuon relink`.
 
-[Unreleased]: https://github.com/ralphlagumen/tuon/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/ralphlagumen/tuon/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/ralphlagumen/tuon/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/ralphlagumen/tuon/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/ralphlagumen/tuon/releases/tag/v0.2.0
