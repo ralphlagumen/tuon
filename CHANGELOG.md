@@ -5,6 +5,10 @@ and versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Known issues
+- `tuon logout` fails inside the sandbox ("keychain: … operation not permitted"): it deletes the session but stops
+  before `--wipe`. Until it's fixed, use `TUON_NO_SANDBOX=1 tuon logout --wipe`.
+
 ### Fixed
 - Login loop: right after logging in, tuon said "Messenger logged you out" again. Facebook now redirects
   `www.facebook.com/messages` to `web.facebook.com`, and the login cookies were dropped on that redirect. tuon now
@@ -12,8 +16,9 @@ and versions follow [Semantic Versioning](https://semver.org/).
 
 ### Security
 - tuon is now two programs. `tuon` is a small launcher (unlock, login browser, update) with none of the Messenger,
-  encryption or database libraries; `tuon-app` holds them and on macOS always runs in the sandbox. Login, setup,
-  history and relink now run inside the sandbox too. `tuon update` from 0.3.0 installs only the launcher; run
+  encryption or database libraries; `tuon-app` holds them and on macOS always runs in the sandbox, so their code no
+  longer starts outside it. Login, setup, history and relink now run inside the sandbox too. The sandbox still has
+  known gaps (`open` likely, a temp folder shared with `tuon update`, a copy of the app that can outlive it; see SECURITY.md). `tuon update` from 0.3.0 installs only the launcher; run
   `tuon update` once more to get `tuon-app`. `tuon sandbox-test` also checks that the app can't start the launcher.
 - brotli 1.2.4 → 1.2.7 (GO-2026-6888) and klauspost/compress 1.20.0 → 1.20.2 (GO-2026-6865): both were reachable
   from Messenger's compressed HTTP responses.
