@@ -12,6 +12,11 @@ func TestProfile(t *testing.T) {
 			t.Errorf("profile missing %q", want)
 		}
 	}
+	for _, bad := range []string{`"/usr/bin/open"`, `"/usr/bin/osascript"`} {
+		if strings.Contains(p, bad) {
+			t.Errorf("%s can ask macOS to start programs outside the sandbox", bad)
+		}
+	}
 	if strings.Contains(p, `"/Users/a/.local/bin/tuon"`) {
 		t.Error("the sandboxed app must not be able to start the launcher (it runs unsandboxed)")
 	}

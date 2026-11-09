@@ -1,12 +1,16 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
+	"time"
 
+	"github.com/ralph/tuon/internal/opener"
 	"github.com/ralph/tuon/internal/paths"
 	"github.com/ralph/tuon/internal/sandbox"
 	"github.com/ralph/tuon/internal/store"
@@ -96,12 +100,72 @@ func sandboxTest() int {
 	check("start fdesetup (FileVault check)", true, run("/usr/bin/fdesetup", "isactive"))
 	check("start pbpaste (paste)", true, run("/usr/bin/pbpaste"))
 	check("start afplay (new-message sound, muted here)", true, run("/usr/bin/afplay", "-v", "0", "/System/Library/Sounds/Pop.aiff"))
-	_, err := exec.Command("/usr/bin/osascript", "-e", "the clipboard as text").Output()
-	check("osascript clipboard (paste images, files)", true, err)
+	check("start osascript", false, run("/usr/bin/osascript", "-e", "1"))
+	check("start open", false, run("/usr/bin/open", "-g", "https://example.com"))
+	if c := opener.Connect(); c != nil {
+		_, err := c.Do(opener.OpClipFile)
+		check("paste files through the launcher", true, err)
+		_, err = c.Do(opener.OpURL, "file:///etc/hosts")
+		check("launcher opens a file:// link", false, err)
+		_, err = c.Do(opener.OpPhotos, "/etc/hosts")
+		check("launcher opens a non-photo", false, err)
+		_, err = c.Do(opener.OpReveal, filepath.Join(home, ".zshrc"))
+		check("launcher shows a file outside Downloads", false, err)
+	} else {
+		check("the launcher's opener is connected", true, errors.New("not connected"))
+	}
+	// escapes through macOS itself: a program the app asks LaunchServices
+	// to start runs outside the sandbox. The probe is a tiny hidden app
+	// that marks your home folder (which the app can't write) for a few
+	// seconds, then removes the mark.
+	check("start an app through `open`", false, escaped(home, "open", func(app string) error {
+		return run("/usr/bin/open", "-g", "-j", app)
+	}))
+	check("start an app through osascript (JXA, NSWorkspace)", false, escaped(home, "jxa", func(app string) error {
+		return run("/usr/bin/osascript", "-l", "JavaScript", "-e",
+			`ObjC.import("AppKit"); $.NSWorkspace.sharedWorkspace.openURL($.NSURL.fileURLWithPath(`+strconv.Quote(app)+`))`)
+	}))
+	check("start an app through osascript (JXA, LaunchServices)", false, escaped(home, "jxa-ls", func(app string) error {
+		return run("/usr/bin/osascript", "-l", "JavaScript", "-e",
+			`ObjC.import("CoreServices"); $.LSOpenCFURLRef($.NSURL.fileURLWithPath(`+strconv.Quote(app)+`), null)`)
+	}))
 	if fails > 0 {
 		fmt.Printf("  %d check(s) failed.\n", fails)
 		return 1
 	}
 	fmt.Println("  All checks passed.")
 	return 0
+}
+
+// escaped builds the probe app, asks start to launch it, and reports nil
+// (allowed) if it ran outside the sandbox.
+func escaped(home, name string, start func(app string) error) error {
+	dir := filepath.Join(os.TempDir(), "tuon", "escape-probe-"+name)
+	defer os.RemoveAll(dir)
+	app := filepath.Join(dir, "TuonProbe.app")
+	mark := filepath.Join(home, ".tuon-escape-probe-"+name)
+	bin := filepath.Join(app, "Contents", "MacOS")
+	if err := os.MkdirAll(bin, 0o700); err != nil {
+		return nil // couldn't set up: count as allowed, so the check fails loudly
+	}
+	plist := `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+<key>CFBundleExecutable</key><string>probe</string>
+<key>CFBundleIdentifier</key><string>dev.tuon.escape-probe-` + name + `</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>LSUIElement</key><true/>
+</dict></plist>`
+	script := "#!/bin/sh\ntouch " + strconv.Quote(mark) + "\nsleep 4\nrm -f " + strconv.Quote(mark) + "\n"
+	_ = os.WriteFile(filepath.Join(app, "Contents", "Info.plist"), []byte(plist), 0o600)
+	if os.WriteFile(filepath.Join(bin, "probe"), []byte(script), 0o700) != nil {
+		return nil
+	}
+	_ = start(app)
+	for i := 0; i < 30; i++ {
+		if _, err := os.Stat(mark); err == nil {
+			return nil // it ran out there
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return errors.New("refused")
 }

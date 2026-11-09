@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/ralph/tuon/internal/connector"
+	"github.com/ralph/tuon/internal/opener"
 )
 
 // Everything that talks to the operating system (clipboard, sound, opening
@@ -56,6 +57,13 @@ func timeout() (context.Context, context.CancelFunc) {
 func clipboardImage() ([]byte, error) {
 	ctx, cancel := timeout()
 	defer cancel()
+	if c := opener.Connect(); c != nil { // sandboxed: the launcher reads it
+		rep, err := c.Do(opener.OpClipImage)
+		if err != nil || len(rep.Data) == 0 {
+			return nil, errors.New("no image")
+		}
+		return rep.Data, nil
+	}
 	switch runtime.GOOS {
 	case "darwin":
 		out, err := runTool(ctx, "", "osascript", "-e", "the clipboard as «class PNGf»")
@@ -90,6 +98,10 @@ func clipboardImage() ([]byte, error) {
 func clipboardFile() string {
 	ctx, cancel := timeout()
 	defer cancel()
+	if c := opener.Connect(); c != nil {
+		rep, _ := c.Do(opener.OpClipFile)
+		return strings.TrimSpace(rep.Text)
+	}
 	switch runtime.GOOS {
 	case "darwin":
 		out, _ := runTool(ctx, "", "osascript", "-e", "POSIX path of (the clipboard as «class furl»)")
@@ -153,6 +165,10 @@ func openFilesOS(paths []string) error {
 	if len(paths) == 0 {
 		return nil
 	}
+	if c := opener.Connect(); c != nil { // sandboxed: the launcher opens them in Preview
+		_, err := c.Do(opener.OpPhotos, paths...)
+		return err
+	}
 	if runtime.GOOS == "darwin" {
 		return exec.Command("open", paths...).Start()
 	}
@@ -165,6 +181,10 @@ var openURL = openWebLink // tests swap this
 // https: a link must never launch an app or open a local file.
 func openWebLink(raw string) error {
 	if _, err := safeWebURL(raw); err != nil {
+		return err
+	}
+	if c := opener.Connect(); c != nil { // sandboxed: the launcher opens it
+		_, err := c.Do(opener.OpURL, raw)
 		return err
 	}
 	return openFile(raw)
@@ -283,6 +303,10 @@ func uniquePath(p string) string {
 
 // revealFile shows a saved file in the file manager without opening it.
 var revealFile = func(path string) error {
+	if c := opener.Connect(); c != nil { // sandboxed: the launcher shows it
+		_, err := c.Do(opener.OpReveal, path)
+		return err
+	}
 	switch runtime.GOOS {
 	case "darwin":
 		return exec.Command("open", "-R", path).Start()

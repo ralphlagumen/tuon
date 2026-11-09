@@ -24,6 +24,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/ralph/tuon/internal/browserlogin"
+	"github.com/ralph/tuon/internal/opener"
 	"github.com/ralph/tuon/internal/paths"
 	"github.com/ralph/tuon/internal/sandbox"
 	"github.com/ralph/tuon/internal/vault"
@@ -193,15 +194,54 @@ func runWith(cmd *exec.Cmd, key, login []byte) (int, error) {
 		return 0, err
 	}
 	defer l.Close()
-	cmd.ExtraFiles = []*os.File{k, l} // fd 3 and 4 in the app
-	return run(cmd)
+	// fd 5 and 6: the app asks the launcher to open links and photos and
+	// to read the clipboard (it can't start open or osascript itself)
+	reqR, reqW, err := os.Pipe()
+	if err != nil {
+		return 0, err
+	}
+	repR, repW, err := os.Pipe()
+	if err != nil {
+		reqR.Close()
+		reqW.Close()
+		return 0, err
+	}
+	cmd.Env = append(cmd.Env, opener.Env+"=5")
+	cmd.ExtraFiles = []*os.File{k, l, reqW, repR} // fd 3, 4, 5, 6 in the app
+	if err := cmd.Start(); err != nil {
+		reqR.Close()
+		reqW.Close()
+		repR.Close()
+		repW.Close()
+		return 0, err
+	}
+	reqW.Close() // the app's ends stay open in the app only
+	repR.Close()
+	done := make(chan struct{})
+	go func() {
+		opener.Serve(reqR, repW, handleOpen)
+		close(done)
+	}()
+	code, err := wait(cmd)
+	reqR.Close()
+	repW.Close()
+	<-done
+	return code, err
 }
 
 // run runs the app in the foreground and returns its exit code.
 func run(cmd *exec.Cmd) (int, error) {
+	if err := cmd.Start(); err != nil {
+		return 0, err
+	}
+	return wait(cmd)
+}
+
+// wait waits for the started app and returns its exit code.
+func wait(cmd *exec.Cmd) (int, error) {
 	signal.Ignore(os.Interrupt) // ctrl+c belongs to the app while it runs
 	defer signal.Reset(os.Interrupt)
-	err := cmd.Run()
+	err := cmd.Wait()
 	var ee *exec.ExitError
 	if errors.As(err, &ee) {
 		return ee.ExitCode(), nil

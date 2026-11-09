@@ -1981,7 +1981,7 @@ func (m Model) saveImage(ref string, open bool) tea.Cmd {
 		if open {
 			path, err := tempPhoto(b)
 			if err == nil {
-				err = openFile(path)
+				err = previewFiles([]string{path})
 			}
 			if err != nil {
 				return toastMsg{"open failed: " + err.Error()}

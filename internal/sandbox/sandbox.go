@@ -8,9 +8,9 @@
 //   - refuses writes anywhere except tuon's folder, Downloads (saved
 //     files) and your temp folder — so nothing can replace the tuon
 //     binary or add itself to your shell's startup files;
-//   - refuses to start any program but the few tuon uses (sound,
-//     clipboard, opening files and links, its Touch ID helper), and
-//     refuses to script other apps.
+//   - refuses to start any program but the few tuon uses (sound, text
+//     clipboard, the FileVault check, its Touch ID helper), and refuses
+//     to script other apps; the launcher opens links and photos for it.
 //
 // The sandboxed program is tuon-app. tuon itself is a small launcher with
 // none of the Messenger, encryption or database code: it unlocks, starts
@@ -74,11 +74,13 @@ var denyRead = []string{
 }
 
 // allowExec: the only programs the sandboxed app may start, besides tuon
-// itself and its Touch ID helper: sound, opening files and links, the
-// clipboard, and the FileVault check.
+// itself and its Touch ID helper: sound, copying and pasting text, and the
+// FileVault check. Not open or osascript: both can ask macOS to start any
+// program, which then runs outside the sandbox (sandbox-test probes it).
+// The launcher opens links and photos and reads pasted images for the app
+// (internal/opener).
 var allowExec = []string{
-	"/usr/bin/afplay", "/usr/bin/open", "/usr/bin/pbcopy", "/usr/bin/pbpaste",
-	"/usr/bin/osascript", "/usr/bin/fdesetup",
+	"/usr/bin/afplay", "/usr/bin/pbcopy", "/usr/bin/pbpaste", "/usr/bin/fdesetup",
 }
 
 // Active reports whether this process already runs sandboxed.
