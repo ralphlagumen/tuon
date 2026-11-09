@@ -137,10 +137,11 @@ From your shell:
 | `tuon update` | Install the newest signed release |
 | `tuon relink` | Register tuon again as a new linked device, if one contact's messages keep failing to decrypt |
 | `tuon logout [--wipe]` | Forget your session (`--wipe`: and all local data) |
+| `tuon version` | Which release you have (`dev` when built from a checkout that isn't a release tag) |
 
 ## Performance
 
-<img src="docs/img/memory.svg" alt="Memory while idle: tuon 39 MB, messenger.com in Chrome 1,539 MB">
+<img src="docs/img/memory.svg" alt="Memory while idle: tuon 41 MB, messenger.com in Chrome 1,539 MB">
 
 | Measure | tuon |
 |---|---|
@@ -150,7 +151,7 @@ From your shell:
 | Photos downloaded when opening a chat in Terminal.app | 0 (on click) |
 | Program size | launcher 3.4 MB, chat app 31 MB, Touch ID helper 63 KB |
 
-Memory and CPU measured on an M-series Mac with macOS `footprint` and `ps`, with the same account: the table on 2026-11-09 (two programs, sandboxed, a few minutes after start), the chart on 2026-11-05 after the first sync, before the encryption and sandbox work. The Chrome figure adds up every Chrome process for one messenger.com tab, left idle for 30 seconds.
+Memory and CPU measured on an M-series Mac with macOS `footprint` and `ps`, with the same account: tuon on 2026-11-09 (both programs, resident memory, sandboxed, a few minutes after start), Chrome on 2026-11-05. The Chrome figure adds up every Chrome process for one messenger.com tab, left idle for 30 seconds.
 
 ## How it works
 
@@ -197,7 +198,9 @@ Everything in `~/.config/tuon` is readable only by you.
 for c in tuon tuon-app; do CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags "-s -w -buildid=" -o bin/$c ./cmd/$c; done   # build (same flags as releases)
 ./scripts/check.sh            # checksums, build, vet, tests, known vulnerabilities: run before every push
 ./scripts/deps-review.sh      # after changing a dependency (see DEPENDENCIES.md)
-./scripts/release.sh v1.2.3   # build a signed tag for every platform, with SHA256SUMS
+git tag -s v1.2.3 -m v1.2.3 && git push origin v1.2.3   # sign and push the release tag (maintainer key)
+./scripts/release.sh v1.2.3   # build a signed tag for every platform (tuon and tuon-app), with SHA256SUMS
+gh release create v1.2.3 dist/v1.2.3/* --verify-tag --notes-file notes.md   # publish (notes: that version's CHANGELOG section)
 
 TUON_DOCS=docs/img go test ./internal/ui -run TestDocsScreenshots   # redraw the README screenshots
 ```

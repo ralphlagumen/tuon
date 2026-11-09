@@ -5,6 +5,9 @@ and versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- `tuon version` shows which release you have (`dev` for a build that isn't a release tag).
+
 ### Changed (login)
 - The login window keeps its own browser profile (in `~/Library/Caches/tuon`) instead of a fresh one each time, so
   Facebook recognizes the device and a password manager extension you add there stays. tuon only takes the session

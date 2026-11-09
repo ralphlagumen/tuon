@@ -34,6 +34,10 @@ func main() {
 	setUmask()
 	sandbox.ClearMark()
 	args := os.Args[1:]
+	if len(args) > 0 && (args[0] == "version" || args[0] == "--version" || args[0] == "-v") {
+		fmt.Println("tuon", version) // the release tag it was built from, or "dev"
+		return
+	}
 	if len(args) > 0 && args[0] == "update" { // needs to write tuon's own files: never sandboxed
 		if err := update(); err != nil {
 			fail(err)

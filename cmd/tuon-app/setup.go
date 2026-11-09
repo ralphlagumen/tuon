@@ -35,6 +35,7 @@ const usage = `tuon: calm, chat-only Messenger
                        contact's messages keep failing to decrypt)
   tuon logout          forget your login on this computer
   tuon logout --wipe   also delete all of tuon's data on this computer
+  tuon version         which release this is
   tuon --help          this help
 `
 
