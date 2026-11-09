@@ -23,13 +23,15 @@ and versions follow [Semantic Versioning](https://semver.org/).
 - tuon is now two programs. `tuon` is a small launcher (unlock, login browser, update) with none of the Messenger,
   encryption or database libraries; `tuon-app` holds them and on macOS always runs in the sandbox, so their code no
   longer starts outside it. Login, setup, history and relink now run inside the sandbox too. The sandbox still has
-  known gaps (a copy of the app that can outlive it, the shared terminal; see SECURITY.md).
+  known gap (a copy of the app that starts its own session can outlive it; see SECURITY.md).
 - `tuon update` and the login browser work in `~/Library/Caches/tuon`, which the sandboxed app can't write, so it
   can't change what an update builds or the browser's profile. Go's, git's and swiftc's temp files go there too. `tuon update` from 0.3.0 installs only the launcher; run
   `tuon update` once more to get `tuon-app`. `tuon sandbox-test` also checks that the app can't start the launcher.
 - The sandboxed app can no longer start `open` or `osascript`: both could ask macOS to start a program outside the
   sandbox (shown with a probe app; `tuon sandbox-test` now checks both). The launcher opens links, photos (in
   Preview only) and saved files (shown in Finder) and reads pasted images and files for it, checking each request.
+- The chat app runs on a terminal of its own, which the launcher relays to yours, so it can't type into your shell
+  after tuon quits (TIOCSTI). When it exits, the launcher stops anything it left running in its session.
 - brotli 1.2.4 → 1.2.7 (GO-2026-6888) and klauspost/compress 1.20.0 → 1.20.2 (GO-2026-6865): both were reachable
   from Messenger's compressed HTTP responses.
 

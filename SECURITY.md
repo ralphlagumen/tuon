@@ -29,7 +29,8 @@ tuon is two programs. `tuon`, the command you type, is a small launcher: it unlo
 - **It can only start a few programs:** the sound player, the text clipboard tools (`pbcopy`, `pbpaste`), the FileVault check, its Touch ID helper and another copy of itself. Not `open` or `osascript`: both can ask macOS to start any program, and what macOS starts runs outside the sandbox (`tuon sandbox-test` tries both and expects a refusal). Shells and anything else are refused, and it can't send Apple Events to other apps. Network access stays open: Messenger needs it.
 - **The launcher opens things for it, after checking:** web links (http and https only), photos (only image files from tuon's photo folder, and only in Preview, never by their default app), saved files (only shown in Finder, never opened), and pasted images and files from the clipboard.
 - **Everything that talks to Messenger runs inside it,** including `tuon setup`, `tuon login`, `tuon history` and `tuon relink`. Only the launcher's own jobs run outside: the Touch ID unlock, the login browser window (a browser can't run in the sandbox), and `tuon update`, which has to replace tuon's files. The chat app can't start the launcher directly.
-- **Known gaps, being fixed:** a copy of the app can keep running after tuon quits, and the app shares your terminal.
+- **Its own terminal.** The app runs on a terminal of its own that the launcher relays to yours, so it can't type into your shell after tuon quits (the TIOCSTI trick); when it exits, anything it left running in its session is stopped.
+- **Known gap:** a copy of the app that starts its own session can keep running after tuon quits (still sandboxed, with no terminal).
 - `tuon sandbox-test` shows the checks passing. `TUON_NO_SANDBOX=1 tuon` turns it off for troubleshooting. Linux and Windows don't have it yet.
 
 ## Data on your computer

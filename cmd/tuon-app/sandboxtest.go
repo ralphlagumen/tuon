@@ -101,6 +101,7 @@ func sandboxTest() int {
 	check("start pbpaste (paste)", true, run("/usr/bin/pbpaste"))
 	check("start afplay (new-message sound, muted here)", true, run("/usr/bin/afplay", "-v", "0", "/System/Library/Sounds/Pop.aiff"))
 	check("start osascript", false, run("/usr/bin/osascript", "-e", "1"))
+	check("share your terminal (could type into your shell)", false, sharesTerminal())
 	check("start open", false, run("/usr/bin/open", "-g", "https://example.com"))
 	if c := opener.Connect(); c != nil {
 		_, err := c.Do(opener.OpClipFile)

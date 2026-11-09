@@ -208,25 +208,28 @@ func runWith(cmd *exec.Cmd, key, login []byte) (int, error) {
 	}
 	cmd.Env = append(cmd.Env, opener.Env+"=5")
 	cmd.ExtraFiles = []*os.File{k, l, reqW, repR} // fd 3, 4, 5, 6 in the app
-	if err := cmd.Start(); err != nil {
-		reqR.Close()
-		reqW.Close()
-		repR.Close()
-		repW.Close()
-		return 0, err
-	}
-	reqW.Close() // the app's ends stay open in the app only
-	repR.Close()
 	done := make(chan struct{})
 	go func() {
 		opener.Serve(reqR, repW, handleOpen)
 		close(done)
 	}()
-	code, err := wait(cmd)
-	reqR.Close()
-	repW.Close()
-	<-done
-	return code, err
+	defer func() {
+		reqR.Close()
+		repW.Close()
+		<-done
+	}()
+	// started: the app's ends stay open in the app only
+	started := func() { reqW.Close(); repR.Close() }
+	code, onPty, err := runOnPty(cmd, started)
+	if onPty {
+		return code, err
+	}
+	if err := cmd.Start(); err != nil {
+		started()
+		return 0, err
+	}
+	started()
+	return wait(cmd)
 }
 
 // run runs the app in the foreground and returns its exit code.

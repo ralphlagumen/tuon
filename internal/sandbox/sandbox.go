@@ -42,6 +42,9 @@ const (
 	LoginFDEnv = "TUON_LOGIN_FD"
 	// NoteEnv: why the app runs without the sandbox, for its header.
 	NoteEnv = "TUON_SANDBOX_NOTE"
+	// ParentTTYEnv: the device of the launcher's terminal; the app runs on
+	// a terminal of its own (sandbox-test checks they differ).
+	ParentTTYEnv = "TUON_PARENT_TTY"
 )
 
 // denyRead: paths under your home that tuon never needs to read.
