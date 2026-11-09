@@ -1053,6 +1053,64 @@ func wrapContent(content *waConsumerApplication.ConsumerApplication_Content) *wa
 	}
 }
 
+// MarkRead sends read receipts: Messenger's own "mark read" for plain chats
+// (up to the newest message read), and per-message receipts for encrypted
+// ones (by sender in groups), like Messenger's apps and Beeper's bridge.
+func (c *Conn) MarkRead(ctx context.Context, chatID string, msgs []connector.Message) error {
+	if len(msgs) == 0 {
+		return nil
+	}
+	key, err := strconv.ParseInt(chatID, 10, 64)
+	if err != nil {
+		return err
+	}
+	c.mu.Lock()
+	tt := c.threadType[key]
+	wa := c.wa
+	c.mu.Unlock()
+	newest := msgs[0].Time
+	for _, m := range msgs {
+		if m.Time.After(newest) {
+			newest = m.Time
+		}
+	}
+	if !tt.IsWhatsApp() {
+		_, err := c.cli.ExecuteTasks(ctx, &socket.ThreadMarkReadTask{
+			ThreadId: key, LastReadWatermarkTs: newest.UnixMilli(), SyncGroup: 1,
+		})
+		return err
+	}
+	if wa, err = c.readyWA(ctx, wa); err != nil {
+		return err
+	}
+	jid := waTypes.JID{User: chatID, Server: waTypes.MessengerServer}
+	group := tt == table.ENCRYPTED_OVER_WA_GROUP
+	if group {
+		jid.Server = waTypes.GroupServer
+	}
+	bySender := map[string][]waTypes.MessageID{}
+	for _, m := range msgs {
+		if m.FromMe || m.ID == "" || m.SenderID == c.SelfID() {
+			continue
+		}
+		who := "" // in a 1:1 the receipt names no sender
+		if group {
+			who = m.SenderID
+		}
+		bySender[who] = append(bySender[who], m.ID)
+	}
+	for who, ids := range bySender {
+		var sender waTypes.JID
+		if who != "" {
+			sender = waTypes.JID{User: who, Server: waTypes.MessengerServer}
+		}
+		if err := wa.MarkRead(ctx, ids, time.Now(), jid, sender); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (c *Conn) React(ctx context.Context, chatID, messageID, senderID, emoji string) error {
 	key, err := strconv.ParseInt(chatID, 10, 64)
 	if err != nil {

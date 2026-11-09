@@ -42,6 +42,7 @@ type fakeConn struct {
 	files       []connector.Attachment
 	sent        []sent
 	reacted     []reacted
+	read        []string
 }
 
 func (f *fakeConn) Start(context.Context) error { return nil }
@@ -92,6 +93,12 @@ func (f *fakeConn) FetchMedia(_ context.Context, md connector.Media) ([]byte, er
 		return nil, err
 	}
 	return f.media, nil
+}
+func (f *fakeConn) MarkRead(_ context.Context, chat string, msgs []connector.Message) error {
+	for _, m := range msgs {
+		f.read = append(f.read, chat+"/"+m.ID)
+	}
+	return nil
 }
 func (f *fakeConn) Close() {}
 
@@ -1597,5 +1604,33 @@ func TestExpandCommand(t *testing.T) {
 		if got := expandCommand(in); got != want {
 			t.Errorf("expandCommand(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestSeenReceipts(t *testing.T) {
+	m, _, fc := newTestModel(t, 100, 26)
+	m = seed(m)
+	m = key(m, "3") // inbox: Dev Team (unread) first
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = run(next.(Model), cmd)
+	if strings.Join(fc.read, ",") != "10/m1,10/m3" {
+		t.Fatalf("opening an unread chat should mark others' messages read, got %v", fc.read)
+	}
+	// a new message while you're in it
+	now := time.Now()
+	next, cmd = m.Update(EventsMsg{connector.MessageEvent{Message: connector.Message{ID: "m4", ChatID: "10", SenderID: "100", Text: "one more", Time: now}}})
+	m = run(next.(Model), cmd)
+	if strings.Join(fc.read, ",") != "10/m1,10/m3,10/m4" {
+		t.Fatalf("a message arriving in the open chat should be marked read, got %v", fc.read)
+	}
+	// :seen off stops it
+	m = key(m, "tab")
+	nm, _ := m.runCommand("seen off")
+	m = nm.(Model)
+	m = key(m, "enter")
+	next, cmd = m.Update(EventsMsg{connector.MessageEvent{Message: connector.Message{ID: "m5", ChatID: "10", SenderID: "100", Text: "and another", Time: now.Add(time.Second)}}})
+	m = run(next.(Model), cmd)
+	if len(fc.read) != 3 {
+		t.Fatalf(":seen off should send nothing, got %v", fc.read)
 	}
 }

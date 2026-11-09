@@ -30,7 +30,8 @@ It's a personal tool that talks to Messenger the unofficial way. Read [Before yo
 - **Real photos** in Ghostty, kitty and WezTerm. Other terminals show a `View photo` button that opens the photo in your viewer, with several photos opening as a gallery.
 - **Files** people send you save to your Downloads folder with one key. Tuon never opens or runs them.
 - **Keyboard first**, with the mouse working too: click a chat to open it, click a photo to view it, drag over messages to copy them.
-- **Quiet by default.** One soft sound for new messages, which you can change or turn off, and no "seen" receipts sent back.
+- **Quiet by default.** One soft sound for new messages, which you can change or turn off.
+- **Read on every device.** A chat you open in tuon shows as read on your phone and the web, and people see you've seen their messages. `:seen off` keeps your reading private (then your phone still shows those chats unread).
 - **Locked and encrypted.** Opening tuon asks for Touch ID (or a passphrase off macOS), it locks itself when idle, and your session, messages and keys are encrypted on disk. On macOS the chat app runs in a sandbox that keeps it away from common secret stores. See [SECURITY.md](SECURITY.md), including what it doesn't protect yet.
 
 <p align="center">
@@ -126,7 +127,7 @@ With a message selected:
 
 Attached files appear in your text as `[Image #1]` or `[File #2]`. Delete the token to drop the file. Your message shows right away as "sending…", and as "not sent" if Messenger hasn't confirmed it after 45 seconds. If sending fails, your text (and any files not sent) go back in the box.
 
-Type `:` in the chat list for commands, or just their first letter: `:mute` (`:m`), `:sound` (`:s`: pick the new-message sound and volume; `:s off` turns it off), `:images off` (`:i off`), `:previews off` (`:p off`: no message text in the chat list, for when someone can see your screen), `:lock` (`:l`; tuon also locks after 10 minutes idle), `:help` (`:h`), `:quit` (`:q`).
+Type `:` in the chat list for commands, or just their first letter: `:mute` (`:m`), `:sound` (`:s`: pick the new-message sound and volume; `:s off` turns it off), `:images off` (`:i off`), `:previews off` (`:p off`: no message text in the chat list, for when someone can see your screen), `:seen off` (`:r off`: stop marking chats read on Messenger), `:lock` (`:l`; tuon also locks after 10 minutes idle), `:help` (`:h`), `:quit` (`:q`).
 
 From your shell:
 
@@ -175,7 +176,6 @@ The **connector** speaks Messenger's protocol through [mautrix-meta](https://git
 ## Known gaps
 
 - Older encrypted messages need your Messenger PIN (setup asks; or `tuon history` later). Tuon uses the PIN to join Messenger's encrypted backup and doesn't keep it. Messenger allows only a few wrong tries.
-- Read state isn't sent back to Messenger, so your phone still shows chats you read in Tuon as unread.
 - Videos and voice messages show as tags. Open them on your phone.
 - Messenger refuses some file types (such as .zip) in chats that aren't end-to-end encrypted, on messenger.com too; tuon says so instead of sending.
 - Encrypted messages that fail to decrypt show as "loading from your backup" until your phone backs them up, usually within seconds to minutes. If one person's messages keep failing, tuon says so and suggests `tuon relink`.

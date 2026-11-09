@@ -156,6 +156,10 @@ type Connector interface {
 	// React sets our reaction on a message; emoji "" removes it.
 	// senderID is who wrote the message (encrypted chats need it).
 	React(ctx context.Context, chatID, messageID, senderID, emoji string) error
+	// MarkRead tells the platform you've read these messages (other
+	// people's, in chatID), so the chat shows as read on your phone and the
+	// web too. The senders then see you've seen them.
+	MarkRead(ctx context.Context, chatID string, msgs []Message) error
 	FetchMedia(ctx context.Context, m Media) ([]byte, error)
 	Close()
 }

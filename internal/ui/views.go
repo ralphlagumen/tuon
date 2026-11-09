@@ -954,6 +954,7 @@ func (m Model) helpView() []string {
 		cmd(":l  :lock", "lock tuon now"),
 		cmd(":i  :images on|off", "photos inside the chat"),
 		cmd(":p  :previews on|off", "message text in the chat list"),
+		cmd(":r  :seen on|off", "mark chats read on your phone (people see Seen)"),
 		cmd(":q  :quit", "quit"),
 		"",
 		head("new chats land in Inbox. Move them once with t; they stay put."),

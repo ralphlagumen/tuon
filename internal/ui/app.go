@@ -51,6 +51,7 @@ const (
 	thumbMaxCols    = 64  // widest inline photo, in cells (1 cell = 1 px wide)
 	settingImage    = "images"
 	settingPreviews = "previews"
+	settingSeen     = "seen" // send read receipts (on by default)
 	settingSound    = "sound"
 	maxSugg         = 5
 )
@@ -152,6 +153,8 @@ type Model struct {
 	loggedOut bool      // Messenger rejected the login: main runs the login again
 	started   time.Time // messages older than this never chime
 	soundOn   bool
+	seenOn    bool                 // tell Messenger what you've read (:seen)
+	readUpTo  map[string]time.Time // per chat: newest message already marked read this run
 	soundName string
 	soundVol  int // percent, 10-200
 	lastChime time.Time
@@ -213,6 +216,7 @@ func New(ctx context.Context, st *store.Store, conn connector.Connector, platfor
 		space:      firstFolder(st),
 		imagesOn:   st.Setting(settingImage, "on") == "on",
 		previewsOn: st.Setting(settingPreviews, "on") == "on",
+		seenOn:     st.Setting(settingSeen, "on") == "on",
 		soundOn:    st.Setting(settingSound, "on") == "on",
 		soundName:  st.Setting("sound_name", defaultSound),
 		soundVol:   atoiOr(st.Setting("sound_volume", "100"), 100),
@@ -590,6 +594,9 @@ func (m *Model) applyEvents(evts []any) tea.Cmd {
 	}
 	m.reloadChats()
 	cmd := tea.Batch(append(refills, m.reloadMessages())...)
+	if openID != "" {
+		cmd = tea.Batch(cmd, m.sendRead(true)) // new messages in the chat you're in
+	}
 	if chime && m.soundOn && time.Since(m.lastChime) > 2*time.Second {
 		m.lastChime = time.Now()
 		name, vol := m.soundName, m.soundVol
@@ -1247,7 +1254,7 @@ func keptMentions(text string, ms []connector.Mention) []connector.Mention {
 // shortCommands: one letter for each command (":l" locks, ":s off" turns
 // the sound off).
 var shortCommands = map[string]string{
-	"l": "lock", "s": "sound", "m": "mute", "i": "images", "p": "previews", "h": "help",
+	"l": "lock", "s": "sound", "m": "mute", "i": "images", "p": "previews", "h": "help", "r": "seen",
 }
 
 // expandCommand turns a shortcut into its command, keeping "on"/"off".
@@ -1304,6 +1311,20 @@ func (m Model) runCommand(cmd string) (tea.Model, tea.Cmd) {
 			note = "Photos on"
 		}
 		return m, tea.Batch(m.reloadMessages(), m.flash(note))
+	case "seen off", "seen on", "seen":
+		switch {
+		case strings.HasSuffix(cmd, " on"):
+			m.seenOn = true
+		case strings.HasSuffix(cmd, " off"):
+			m.seenOn = false
+		default:
+			m.seenOn = !m.seenOn
+		}
+		_ = m.st.SetSetting(settingSeen, map[bool]string{true: "on", false: "off"}[m.seenOn])
+		if m.seenOn {
+			return m, m.flash("Seen on: chats you open show as read on your phone, and people see you've read them")
+		}
+		return m, m.flash("Seen off: reading in tuon stays private (your phone still shows those chats unread)")
 	case "previews off", "previews on", "previews":
 		switch {
 		case strings.HasSuffix(cmd, " on"):
@@ -1588,6 +1609,48 @@ func (m Model) finishFolderName(name string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// sendRead tells Messenger you've read the open chat, so your phone and the
+// web show it as read (and senders see "Seen"), for messages from others
+// newer than what was already marked this run. wasUnread: the first time a
+// chat opens this run, only an unread chat sends anything (a read one is
+// already read everywhere). Needs m.msgs loaded.
+func (m *Model) sendRead(wasUnread bool) tea.Cmd {
+	if m.chat == nil || !m.seenOn {
+		return nil
+	}
+	if m.readUpTo == nil {
+		m.readUpTo = map[string]time.Time{}
+	}
+	id := m.chat.ID
+	upTo, seenBefore := m.readUpTo[id]
+	var msgs []connector.Message
+	newest := upTo
+	for _, r := range m.msgs {
+		if r.FromMe || r.Pending || r.SenderID == m.conn.SelfID() || !r.Time.After(upTo) {
+			continue
+		}
+		msgs = append(msgs, r.Message)
+		if r.Time.After(newest) {
+			newest = r.Time
+		}
+	}
+	m.readUpTo[id] = newest
+	if len(msgs) == 0 || (!seenBefore && !wasUnread) {
+		return nil
+	}
+	if len(msgs) > 50 {
+		msgs = msgs[len(msgs)-50:]
+	}
+	known, conn, ctx := m.chat.Chat, m.conn, m.ctx
+	return func() tea.Msg {
+		conn.KnowChat(known) // an encrypted 1:1's ID may be the person's
+		ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		_ = conn.MarkRead(ctx, id, msgs) // best effort: tuon's own read state is already set
+		return nil
+	}
+}
+
 func (m *Model) openChat(c store.ChatRow) tea.Cmd {
 	same := m.chat != nil && m.chat.ID == c.ID
 	m.chat = &c
@@ -1603,7 +1666,7 @@ func (m *Model) openChat(c store.ChatRow) tea.Cmd {
 	m.sizeInput()
 	focus := m.compose.Focus()
 	_ = m.st.MarkRead(c.ID)
-	cmd := m.reloadMessages()
+	cmd := tea.Batch(m.reloadMessages(), m.sendRead(c.Unread))
 	m.reloadChats()
 	newest := m.loadNewest()
 	if len(m.msgs) < 20 && newest == nil {
