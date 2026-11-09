@@ -68,7 +68,7 @@ func TestRemoveStaleProfiles(t *testing.T) {
 	past := time.Now().Add(-time.Hour)
 	_ = os.Chtimes(old, past, past)
 	_ = os.Chtimes(other, past, past)
-	removeStaleProfiles()
+	removeStaleProfiles(os.TempDir())
 	if _, err := os.Stat(old); !os.IsNotExist(err) {
 		t.Error("stale profile kept")
 	}

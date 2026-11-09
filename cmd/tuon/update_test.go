@@ -24,3 +24,18 @@ func TestNeedsKey(t *testing.T) {
 		}
 	}
 }
+
+func TestWithTmp(t *testing.T) {
+	toolTmp = "/private/work/tmp"
+	defer func() { toolTmp = "" }()
+	env := withTmp([]string{"TMPDIR=/var/folders/x/T/", "GOTMPDIR=/elsewhere", "HOME=/h"})
+	want := map[string]bool{"TMPDIR=/private/work/tmp": true, "GOTMPDIR=/private/work/tmp": true, "HOME=/h": true}
+	if len(env) != len(want) {
+		t.Fatalf("env %v", env)
+	}
+	for _, kv := range env {
+		if !want[kv] {
+			t.Errorf("unexpected %q", kv)
+		}
+	}
+}

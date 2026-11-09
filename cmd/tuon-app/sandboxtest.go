@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 
+	"github.com/ralph/tuon/internal/paths"
 	"github.com/ralph/tuon/internal/sandbox"
 	"github.com/ralph/tuon/internal/store"
 )
@@ -67,6 +68,10 @@ func sandboxTest() int {
 	check("read ~/.claude", false, read(filepath.Join(home, ".claude")))
 	check("read other apps' containers", false, read(filepath.Join(home, "Library", "Containers")))
 	check("write /private/tmp (shared temp)", false, write("/private/tmp/tuon-probe"))
+	if base := paths.WorkBase(); base != "" { // the launcher's update and login folders
+		_ = os.MkdirAll(base, 0o700) // refused in here; the launcher makes it
+		check("write ~/Library/Caches/tuon (update, login)", false, write(filepath.Join(base, "sandbox-probe")))
+	}
 	run := func(name string, args ...string) error { return exec.Command(name, args...).Run() }
 	check("start /bin/sh", false, run("/bin/sh", "-c", "true"))
 	if exe, err := os.Executable(); err == nil { // tuon runs unsandboxed: never from in here

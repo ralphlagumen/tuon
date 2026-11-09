@@ -42,6 +42,9 @@ func main() {
 	if err != nil {
 		fail(err)
 	}
+	if base := paths.WorkBase(); base != "" { // its folder for update and login work, out of the app's reach
+		_ = os.MkdirAll(base, 0o700)
+	}
 	os.Exit(launch(app, args))
 }
 
@@ -249,7 +252,11 @@ func browserLogin() ([]byte, error) {
 `)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
-	cookies, err := browserlogin.Login(ctx, browser)
+	base := paths.WorkBase() // a folder the sandboxed app can't write
+	if err := os.MkdirAll(base, 0o700); err != nil {
+		return nil, err
+	}
+	cookies, err := browserlogin.Login(ctx, browser, base)
 	if err != nil {
 		return nil, err
 	}

@@ -155,3 +155,17 @@ func TestPlantedPlainSessionIgnored(t *testing.T) {
 		t.Fatal("the planted copy wasn't removed")
 	}
 }
+
+func TestDeleteIgnoresKeychainErrors(t *testing.T) {
+	fakeKeychain(t, true)
+	keyringDelete = func(string, string) error { return errors.New("fork/exec /usr/bin/security: operation not permitted") }
+	dir := t.TempDir()
+	sealed := filepath.Join(dir, "login.enc")
+	_ = os.WriteFile(sealed, []byte("x"), 0o600)
+	if err := Delete(dir); err != nil {
+		t.Fatalf("a keychain error stopped the logout: %v", err)
+	}
+	if _, err := os.Stat(sealed); !os.IsNotExist(err) {
+		t.Fatal("login.enc kept")
+	}
+}

@@ -50,11 +50,18 @@ func update() error {
 	if exe, err = filepath.EvalSymlinks(exe); err != nil {
 		return err
 	}
-	work, err := os.MkdirTemp("", "tuon-update-")
+	// in a folder the sandboxed app can't write, so it can't swap the
+	// source between the checks and the build; the tools' own temp files
+	// (go's build folder, swiftc's objects, the signers list) go there too
+	work, err := paths.WorkDir("update-")
 	if err != nil {
 		return err
 	}
 	defer os.RemoveAll(work)
+	toolTmp = filepath.Join(work, "tmp")
+	if err := os.MkdirAll(toolTmp, 0o700); err != nil {
+		return err
+	}
 	repo := filepath.Join(work, "repo.git")
 
 	fmt.Println("\n  Fetching tuon's releases…")
@@ -132,6 +139,7 @@ func update() error {
 		helper := filepath.Join(filepath.Dir(exe), "tuon-keyhelper")
 		sw := exec.Command("swiftc", "-O", "cmd/tuon-keyhelper/main.swift", "-o", helper+".new")
 		sw.Dir = src
+		sw.Env = withTmp(os.Environ())
 		if out, err := sw.CombinedOutput(); err != nil {
 			fmt.Printf("  Couldn't rebuild the Touch ID helper (kept the old one):\n%s\n", indent(strings.TrimSpace(string(out))))
 		} else if err := os.Rename(helper+".new", helper); err != nil {
@@ -178,7 +186,7 @@ func latestSignedRelease(repo string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	f, err := os.CreateTemp("", "tuon-signers-")
+	f, err := os.CreateTemp(toolTmp, "tuon-signers-")
 	if err != nil {
 		return "", err
 	}
@@ -279,7 +287,25 @@ func safeGitEnv() []string {
 		}
 		env = append(env, kv)
 	}
-	return env
+	return withTmp(env)
+}
+
+// toolTmp is the update's private temp folder ("" before update starts).
+var toolTmp string
+
+// withTmp points the tools' temp files into toolTmp, away from the shared
+// temp folder the sandboxed app can write.
+func withTmp(env []string) []string {
+	if toolTmp == "" {
+		return env
+	}
+	out := []string{"TMPDIR=" + toolTmp, "GOTMPDIR=" + toolTmp}
+	for _, kv := range env {
+		if !strings.HasPrefix(kv, "TMPDIR=") && !strings.HasPrefix(kv, "GOTMPDIR=") {
+			out = append(out, kv)
+		}
+	}
+	return out
 }
 
 // goCmd runs go in the exported release with workspace files and local
@@ -296,7 +322,7 @@ func goCmd(dir string, args ...string) *exec.Cmd {
 		}
 		env = append(env, kv)
 	}
-	cmd.Env = env
+	cmd.Env = withTmp(env)
 	return cmd
 }
 

@@ -152,7 +152,7 @@ func browserLogin(browser string) (auth.Creds, error) {
 `)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
-	cookies, err := browserlogin.Login(ctx, browser)
+	cookies, err := browserlogin.Login(ctx, browser, "") // only without a sandbox: the temp folder is fine
 	return auth.Creds{Platform: browserlogin.Platform, Cookies: cookies}, err
 }
 

@@ -95,14 +95,13 @@ func Save(dir string, c Creds) error {
 	return os.WriteFile(filePath(dir), b, 0o600)
 }
 
-// Delete forgets the login everywhere.
+// Delete forgets the login everywhere. The keychain only held logins from
+// before the vault, and every start already tries to remove them; inside
+// the macOS sandbox the keychain tool can't even start. So a keychain
+// error doesn't stop a logout: only failing to delete tuon's own files does.
 func Delete(dir string) error {
-	err := keyringDelete(service, account)
-	if err != nil && !errors.Is(err, keyring.ErrNotFound) {
-		err = fmt.Errorf("keychain: %w", err)
-	} else {
-		err = nil
-	}
+	_ = keyringDelete(service, account)
+	var err error
 	for _, p := range []string{filePath(dir), legacyPath(dir), sealedPath(dir)} {
 		if e := os.Remove(p); e != nil && !os.IsNotExist(e) {
 			err = e

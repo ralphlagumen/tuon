@@ -65,8 +65,8 @@ func FindBrowser() string {
 // removeStaleProfiles deletes login profiles an interrupted login left
 // behind (tuon killed before it could clean up). Only one login runs at a
 // time, so anything older than a few minutes is stale.
-func removeStaleProfiles() {
-	old, _ := filepath.Glob(filepath.Join(os.TempDir(), "tuon-login-*"))
+func removeStaleProfiles(base string) {
+	old, _ := filepath.Glob(filepath.Join(base, "tuon-login-*"))
 	for _, p := range old {
 		if st, err := os.Stat(p); err == nil && time.Since(st.ModTime()) > 10*time.Minute {
 			_ = os.RemoveAll(p)
@@ -81,10 +81,16 @@ const Platform = "facebook"
 func valid(c map[string]string) bool { return c["c_user"] != "" && c["xs"] != "" }
 
 // Login opens the login window and waits until you've logged in, then
-// returns the window's facebook.com cookies.
-func Login(ctx context.Context, browser string) (map[string]string, error) {
-	removeStaleProfiles()
-	profile, err := os.MkdirTemp("", "tuon-login-")
+// returns the window's facebook.com cookies. The throwaway profile goes in
+// base (the temp folder if empty): the launcher passes a folder the
+// sandboxed app can't write, so it can't tamper with the browser.
+func Login(ctx context.Context, browser, base string) (map[string]string, error) {
+	if base == "" {
+		base = os.TempDir()
+	}
+	removeStaleProfiles(base)
+	removeStaleProfiles(os.TempDir()) // where older versions put them
+	profile, err := os.MkdirTemp(base, "tuon-login-")
 	if err != nil {
 		return nil, err
 	}
