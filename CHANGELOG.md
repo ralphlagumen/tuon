@@ -17,6 +17,7 @@ and versions follow [Semantic Versioning](https://semver.org/).
 - First run asks for Touch ID (or a new passphrase) once: the launcher sets up the lock and hands the key over.
 
 ### Fixed
+- Sending a file Messenger refuses (such as a .zip in a chat that isn't end-to-end encrypted) now says so, instead of "Messenger didn't return a file ID".
 - `tuon history` no longer prints "zerolog: could not write event … file already closed" as it exits.
 - `tuon logout` works inside the sandbox again (it stopped at a keychain error before `--wipe`).
 - Login loop: right after logging in, tuon said "Messenger logged you out" again. Facebook now redirects

@@ -176,6 +176,7 @@ The **connector** speaks Messenger's protocol through [mautrix-meta](https://git
 - Older encrypted messages need your Messenger PIN (setup asks; or `tuon history` later). Tuon uses the PIN to join Messenger's encrypted backup and doesn't keep it. Messenger allows only a few wrong tries.
 - Read state isn't sent back to Messenger, so your phone still shows chats you read in Tuon as unread.
 - Videos and voice messages show as tags. Open them on your phone.
+- Messenger refuses some file types (such as .zip) in chats that aren't end-to-end encrypted, on messenger.com too; tuon says so instead of sending.
 - Encrypted messages that fail to decrypt show as "loading from your backup" until your phone backs them up, usually within seconds to minutes. If one person's messages keep failing, tuon says so and suggests `tuon relink`.
 - The sandbox is macOS only for now.
 

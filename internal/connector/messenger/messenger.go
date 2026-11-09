@@ -1136,7 +1136,9 @@ func (c *Conn) SendFile(ctx context.Context, chatID string, file connector.Attac
 				Msg("upload reply had no known file ID field")
 		}
 		if fbid == 0 {
-			return errors.New("upload: Messenger didn't return a file ID")
+			// Messenger took the upload but described no file: it refuses
+			// some types this way (.zip, confirmed on messenger.com too)
+			return errors.New("Messenger doesn't accept this kind of file (it refuses some, such as .zip): send it from your phone, or as another type")
 		}
 		_, err = c.cli.ExecuteTasks(ctx, &socket.SendMessageTask{
 			ThreadId:         key,
