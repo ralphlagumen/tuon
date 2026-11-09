@@ -75,7 +75,7 @@ The browser window uses tuon's own profile, so your usual browser and its logins
 
 Encrypted chats start empty on a new device, so right after you log in, setup asks for your 6-digit Messenger PIN to load their older messages (typed or pasted). You can skip it and run `tuon history` later, with tuon closed.
 
-When Messenger logs you out, tuon asks you to log in again right away. `tuon logout` forgets your session on this computer, and `tuon logout --wipe` also deletes your chats, folders and encryption keys.
+When Messenger logs you out, tuon asks you to log in again right away. `tuon logout` forgets your session on this computer (and the login window's browser profile), and `tuon logout --wipe` also deletes your chats, folders and encryption keys.
 
 ## Use it
 
@@ -144,13 +144,13 @@ From your shell:
 
 | Measure | tuon |
 |---|---|
-| Memory, idle after sync | 30 MB (42 MB resident) |
+| Memory, idle | 27 MB: launcher 4 MB + chat app 23 MB (41 MB resident) |
 | CPU, idle | under 1% |
 | Redraws while idle | none, apart from a backup check every few minutes while an encrypted message is still loading |
 | Photos downloaded when opening a chat in Terminal.app | 0 (on click) |
-| Program size | 34 MB, plus a 63 KB Touch ID helper |
+| Program size | launcher 3.4 MB, chat app 31 MB, Touch ID helper 63 KB |
 
-Memory and CPU measured on an M-series Mac on 2026-11-05, with the same account, after the first sync (memory with macOS `footprint`, CPU with `top`), before the encryption and sandbox work; size measured after it. The Chrome figure adds up every Chrome process for one messenger.com tab, left idle for 30 seconds.
+Memory and CPU measured on an M-series Mac with macOS `footprint` and `ps`, with the same account: the table on 2026-11-09 (two programs, sandboxed, a few minutes after start), the chart on 2026-11-05 after the first sync, before the encryption and sandbox work. The Chrome figure adds up every Chrome process for one messenger.com tab, left idle for 30 seconds.
 
 ## How it works
 
@@ -187,6 +187,7 @@ The **connector** speaks Messenger's protocol through [mautrix-meta](https://git
 | `~/.config/tuon/tuon.db` | Chats, folders, contacts, the newest 1,000 messages per chat: the whole file encrypted page by page, message text sealed again inside it |
 | `~/.config/tuon/keys.db` | Keys for encrypted chats, encrypted page by page |
 | `~/.config/tuon/tuon.log` | Warnings and errors; starts over past 5 MB |
+| `~/Library/Caches/tuon/browser` | The login window's own browser profile (macOS; `~/.cache/tuon` on Linux), kept between logins; `tuon logout` deletes it |
 
 Everything in `~/.config/tuon` is readable only by you.
 
@@ -210,6 +211,8 @@ internal/keystore/              encrypted keys.db for encrypted-chat keys
 internal/sandbox/               macOS sandbox for the chat app
 internal/auth/                  the saved session
 internal/browserlogin/          the login browser window (used by the launcher)
+internal/opener/                what the sandboxed app asks the launcher to open or paste
+internal/paths/                 tuon's folders and the one-tuon-at-a-time lock
 internal/connector/             what a chat platform must provide
 internal/connector/messenger/   Messenger through mautrix-meta and whatsmeow
 internal/store/                 SQLite: chats, folders, messages, reactions

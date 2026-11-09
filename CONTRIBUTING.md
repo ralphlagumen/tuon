@@ -20,11 +20,11 @@ You need macOS, Go 1.27+ and Homebrew.
 ```sh
 git clone git@github.com:ralphlagumen/tuon.git
 cd tuon
-./install.sh          # builds tuon and installs Ghostty if missing
+./install.sh          # builds tuon, tuon-app and the Touch ID helper, installs Ghostty if missing
 tuon                  # run it inside Ghostty for real photos
 ```
 
-The first run asks for your messenger.com cookies (see the README). Use your own account. If you can, use a **test account**, because Tuon works around Meta's terms (see [Risks](#risks)).
+The first run sets up the lock and asks how to log in (see the README). Use your own account. If you can, use a **test account**, because Tuon works around Meta's terms (see [Risks](#risks)).
 
 ## Layout
 
@@ -36,7 +36,15 @@ internal/connector/              what any chat platform must provide
 internal/connector/messenger/    Messenger via messagix (+ whatsmeow for encrypted chats)
 internal/store/                  SQLite: chats, folders, messages, reactions, people
 internal/ui/                     Bubble Tea UI: views, keys, images, styles
+internal/sandbox/                macOS sandbox profile for tuon-app
+internal/opener/                 links, photos and paste the app asks the launcher for
+internal/browserlogin/, paths/   used by the launcher; vault/ is the lock
 ```
+
+**The launcher stays small.** `cmd/tuon` runs outside the sandbox, so it may only import the standard library,
+`golang.org/x/{crypto,sys,term}` and the few internal packages listed in `cmd/tuon/deps_test.go`. Anything that
+talks to Messenger or the database belongs in `cmd/tuon-app`. `tuon sandbox-test` must pass after any change to the
+sandbox or the launcher.
 
 How data moves: the **connector** turns Messenger traffic into plain events (chats, messages, reactions, people). The **UI** writes them to the **store** and redraws from it. The UI never talks to messagix directly.
 
