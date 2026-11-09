@@ -28,7 +28,7 @@ const usage = `tuon: calm, chat-only Messenger
 
   tuon                 open (run it inside Ghostty for real photos)
   tuon setup           log in and restore older encrypted chats (run by install.sh)
-  tuon login           log in again (when Messenger logs you out)
+  tuon login           log in again (when Messenger logs you out), then open
   tuon history         restore older encrypted chats with your Messenger PIN
   tuon update          install the latest signed release
   tuon relink          register tuon again as a new linked device (if a

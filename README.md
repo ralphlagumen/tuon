@@ -132,7 +132,7 @@ From your shell:
 | Command | Does |
 |---|---|
 | `tuon` | Open tuon |
-| `tuon setup` / `tuon login` | Log in (and restore older encrypted chats with your PIN) |
+| `tuon setup` / `tuon login` | Log in (and restore older encrypted chats with your PIN); `tuon login` then opens tuon |
 | `tuon history` | Restore older encrypted chats with your PIN |
 | `tuon update` | Install the newest signed release |
 | `tuon relink` | Register tuon again as a new linked device, if one contact's messages keep failing to decrypt |

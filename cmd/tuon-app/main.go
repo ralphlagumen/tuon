@@ -17,6 +17,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/rs/zerolog"
 	zlog "github.com/rs/zerolog/log"
+	"golang.org/x/term"
 
 	"github.com/ralph/tuon/internal/auth"
 	"github.com/ralph/tuon/internal/connector/messenger"
@@ -49,7 +50,10 @@ func main() {
 			if err := history(); err != nil { // a new login may be a new account
 				fmt.Fprintln(os.Stderr, "  Couldn't restore history:", err)
 			}
-			return
+			if !term.IsTerminal(int(os.Stdin.Fd())) {
+				return
+			}
+			// then open tuon, as if you'd typed it
 		case "history":
 			if err := history(); err != nil {
 				fail(err)
