@@ -2,6 +2,7 @@ package messenger
 
 import (
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strconv"
 )
@@ -24,6 +25,12 @@ func uploadID(raw json.RawMessage) (int64, []string) {
 		if json.Unmarshal(raw, &m) == nil {
 			for _, e := range m {
 				entries = append(entries, e)
+			}
+		} else {
+			// a flat object: the fields themselves, not keyed by "0"
+			var flat map[string]json.RawMessage
+			if json.Unmarshal(raw, &flat) == nil {
+				entries = append(entries, flat)
 			}
 		}
 	}
@@ -50,4 +57,46 @@ func uploadID(raw json.RawMessage) (int64, []string) {
 	}
 	sort.Strings(keys)
 	return found, keys
+}
+
+// shape describes metadata's layout for the log, with no values: its
+// kind, length and top-level keys (keys of a list's first entry).
+func shape(raw json.RawMessage) string {
+	var v any
+	if json.Unmarshal(raw, &v) != nil {
+		return fmt.Sprintf("not JSON (%d bytes)", len(raw))
+	}
+	switch t := v.(type) {
+	case []any:
+		if len(t) > 0 {
+			if m, ok := t[0].(map[string]any); ok {
+				return fmt.Sprintf("list of %d, first has %v", len(t), sortedKeys(m))
+			}
+		}
+		return fmt.Sprintf("list of %d", len(t))
+	case map[string]any:
+		return fmt.Sprintf("object with %v", sortedKeys(t))
+	default:
+		return fmt.Sprintf("%T", v)
+	}
+}
+
+func sortedKeys(m map[string]any) []string {
+	var keys []string
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// payloadShape: shape of the reply's "payload" object (no values).
+func payloadShape(raw json.RawMessage) string {
+	var r struct {
+		Payload json.RawMessage `json:"payload"`
+	}
+	if json.Unmarshal(raw, &r) != nil || len(r.Payload) == 0 {
+		return "none"
+	}
+	return shape(r.Payload)
 }

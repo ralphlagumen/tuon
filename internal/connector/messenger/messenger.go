@@ -1130,7 +1130,9 @@ func (c *Conn) SendFile(ctx context.Context, chatID string, file connector.Attac
 			// a field messagix doesn't know yet: take any other ID in the reply
 			var keys []string
 			fbid, keys = uploadID(resp.Payload.Metadata)
-			c.log.Warn().Strs("metadata_keys", keys).Str("mime", file.Mime).Int64("found_id", fbid).
+			c.log.Warn().Strs("metadata_keys", keys).Str("metadata_shape", shape(resp.Payload.Metadata)).
+				Str("reply_shape", shape(resp.Raw)).Str("payload_shape", payloadShape(resp.Raw)).
+				Str("mime", file.Mime).Int64("found_id", fbid).
 				Msg("upload reply had no known file ID field")
 		}
 		if fbid == 0 {
