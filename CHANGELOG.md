@@ -10,6 +10,10 @@ and versions follow [Semantic Versioning](https://semver.org/).
   `www.facebook.com/messages` to `web.facebook.com`, and the login cookies were dropped on that redirect. tuon now
   keeps them on redirects that stay on facebook.com (https only).
 
+### Security
+- brotli 1.2.4 → 1.2.7 (GO-2026-6888) and klauspost/compress 1.20.0 → 1.20.2 (GO-2026-6865): both were reachable
+  from Messenger's compressed HTTP responses.
+
 ### Changed
 - New logo: an open enso ring shaped like a chat bubble, with a dot at its centre.
 - The header shows the logo in the name: `tuʘn`.
