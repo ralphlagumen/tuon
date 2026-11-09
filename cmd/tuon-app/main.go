@@ -197,7 +197,7 @@ func run() error {
 		}
 		model.SetLock(touch, vlt.CheckPassphrase, 10*time.Minute)
 	}
-	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithContext(ctx))
+	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithContext(ctx), tea.WithInput(appInput()))
 
 	// Pass connector events to the UI. It sleeps until something arrives,
 	// then gathers whatever else comes within 30ms into one redraw, so a big

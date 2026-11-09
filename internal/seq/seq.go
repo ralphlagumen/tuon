@@ -1,14 +1,16 @@
-package main
+// Package seq knows where terminal input can be cut without splitting an
+// escape sequence or a character. No dependencies (the launcher uses it).
+package seq
 
 import "unicode/utf8"
 
-// completeLen is how much of b can go to the app now without cutting an
+// CompleteLen is how much of b can go to the app now without cutting an
 // escape sequence (a mouse wheel report, an arrow key, a terminal reply)
 // or a UTF-8 character in two. The app's input reader treats a short read
 // as complete, so half a mouse report would arrive as typed text
 // ("[<65;95;46M"). The rest waits for the next read, or a short timeout
 // (a lone Esc is a real key press).
-func completeLen(b []byte) int {
+func CompleteLen(b []byte) int {
 	esc := -1
 	for i := len(b) - 1; i >= 0 && i >= len(b)-64; i-- {
 		if b[i] == 0x1b {

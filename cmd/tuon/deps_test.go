@@ -21,6 +21,7 @@ func TestLauncherStaysSmall(t *testing.T) {
 		"github.com/ralph/tuon/internal/browserlogin", "github.com/ralph/tuon/internal/opener",
 		"github.com/ralph/tuon/internal/paths", "github.com/ralph/tuon/internal/sandbox",
 		"github.com/ralph/tuon/internal/safefile", "github.com/ralph/tuon/internal/vault",
+		"github.com/ralph/tuon/internal/seq",
 	}
 	for _, pkg := range strings.Fields(string(out)) {
 		if !strings.Contains(strings.SplitN(pkg, "/", 2)[0], ".") {

@@ -14,6 +14,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/ralph/tuon/internal/sandbox"
+	"github.com/ralph/tuon/internal/seq"
 )
 
 // The chat app gets a terminal of its own (a pseudo-terminal), and the
@@ -124,7 +125,7 @@ func runOnPty(cmd *exec.Cmd, started func()) (code int, ok bool, err error) {
 func relay(in, ctl int, winch chan os.Signal, resize func(), done chan error) {
 	out := int(os.Stdout.Fd())
 	buf := make([]byte, 32<<10)
-	var held []byte // an unfinished escape sequence or character (completeLen)
+	var held []byte // an unfinished escape sequence or character (seq.CompleteLen)
 	exited := false
 	for {
 		select {
@@ -173,7 +174,7 @@ func relay(in, ctl int, winch chan os.Signal, resize func(), done chan error) {
 		if len(fds) > 1 && fds[1].Revents&unix.POLLIN != 0 {
 			if m, err := unix.Read(in, buf); m > 0 {
 				data := append(held, buf[:m]...)
-				k := completeLen(data)
+				k := seq.CompleteLen(data)
 				writeAll(ctl, data[:k])
 				held = append(held[:0:0], data[k:]...)
 			} else if err != nil {

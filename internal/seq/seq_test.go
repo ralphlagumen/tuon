@@ -1,4 +1,4 @@
-package main
+package seq
 
 import "testing"
 
@@ -23,8 +23,8 @@ func TestCompleteLen(t *testing.T) {
 		"\xe2\x9d":                   0,
 		"\x1b[200~text":              10,
 	} {
-		if got := completeLen([]byte(in)); got != want {
-			t.Errorf("completeLen(%q) = %d, want %d", in, got, want)
+		if got := CompleteLen([]byte(in)); got != want {
+			t.Errorf("CompleteLen(%q) = %d, want %d", in, got, want)
 		}
 	}
 }
