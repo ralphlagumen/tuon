@@ -28,7 +28,7 @@ type ttyIn struct {
 }
 
 func (t *ttyIn) Read(p []byte) (n int, err error) {
-	n = copy(p, t.tail)
+	n = copy(p, t.tail) // only ever the start of a sequence whose rest is waiting
 	t.tail = t.tail[:0]
 	m, err := t.File.Read(p[n:])
 	n += m
@@ -51,7 +51,25 @@ func (t *ttyIn) Read(p []byte) (n int, err error) {
 			break
 		}
 	}
+	if err == nil && n < len(p) {
+		escLast(p[:n])
+	}
 	return n, err
+}
+
+// escLast moves a lone Esc that's directly followed by another escape
+// sequence to the end of the read. Esc pressed while a scroll still coasts
+// arrives glued to the next mouse report ("\x1b\x1b[<65;…M"), which Bubble
+// Tea reads as alt+esc plus typed text; "\x1b[<65;…M\x1b" reads as the
+// scroll, then Esc. Only on short reads, where the end is a real boundary.
+func escLast(b []byte) {
+	for i := 0; i+2 < len(b); i++ {
+		if b[i] == 0x1b && b[i+1] == 0x1b && (b[i+2] == '[' || b[i+2] == 'O') {
+			copy(b[i:], b[i+1:])
+			b[len(b)-1] = 0x1b
+			return
+		}
+	}
 }
 
 // appInput is what Bubble Tea reads keys and mouse events from.

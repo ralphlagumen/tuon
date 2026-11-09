@@ -68,3 +68,21 @@ func TestTTYInFullReadKeepsTail(t *testing.T) {
 }
 
 func seqCut(b []byte) bool { return !strings.HasSuffix(string(b), "M") }
+
+// TestTTYInEscThenMouse: Esc pressed during a coasting scroll arrives glued
+// to the next wheel report; Bubble Tea must get them as two reads.
+func TestTTYInEscThenMouse(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	defer w.Close()
+	in := &ttyIn{File: r}
+	_, _ = w.Write([]byte("\x1b\x1b[<65;159;29M"))
+	buf := make([]byte, 256)
+	n, _ := in.Read(buf)
+	if string(buf[:n]) != "\x1b[<65;159;29M\x1b" {
+		t.Fatalf("got %q, want the wheel report, then the Esc", buf[:n])
+	}
+}

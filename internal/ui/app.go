@@ -1052,6 +1052,11 @@ func (m Model) onComposeKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.compose.SetCursor(start)
 			return m, nil
 		}
+	case "alt+esc": // two quick esc presses can arrive as one key
+		m.escAt = time.Time{}
+		m.compose.SetValue("")
+		m.atts = nil
+		return m, m.flash("cleared")
 	case "esc", "tab":
 		if k.String() == "esc" && m.replyTo != nil { // esc first cancels the reply
 			m.replyTo = nil

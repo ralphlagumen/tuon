@@ -314,6 +314,14 @@ func TestFlow(t *testing.T) {
 		t.Fatalf("esc esc should clear the box: %q", m.compose.Value())
 	}
 
+	// Two quick esc presses can arrive as one alt+esc
+	m = typeText(m, "oops again")
+	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEscape, Alt: true})
+	m = run(next.(Model), cmd)
+	if m.compose.Value() != "" {
+		t.Fatalf("alt+esc should clear the box: %q", m.compose.Value())
+	}
+
 	// Draft kept when leaving: type, tab to list, come back.
 	m = typeText(m, "draft")
 	m = key(m, "tab")
