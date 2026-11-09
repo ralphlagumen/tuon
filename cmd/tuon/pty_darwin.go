@@ -124,6 +124,7 @@ func runOnPty(cmd *exec.Cmd, started func()) (code int, ok bool, err error) {
 func relay(in, ctl int, winch chan os.Signal, resize func(), done chan error) {
 	out := int(os.Stdout.Fd())
 	buf := make([]byte, 32<<10)
+	var held []byte // an unfinished escape sequence or character (completeLen)
 	exited := false
 	for {
 		select {
@@ -138,11 +139,19 @@ func relay(in, ctl int, winch chan os.Signal, resize func(), done chan error) {
 		if !exited {
 			fds = append(fds, unix.PollFd{Fd: int32(in), Events: unix.POLLIN})
 		}
-		n, err := unix.Poll(fds, 100)
+		wait := 100
+		if len(held) > 0 {
+			wait = 25 // the rest of a sequence comes at once; a lone Esc is a key
+		}
+		n, err := unix.Poll(fds, wait)
 		if err != nil && err != unix.EINTR {
 			return
 		}
 		if n == 0 {
+			if len(held) > 0 {
+				writeAll(ctl, held)
+				held = held[:0]
+			}
 			if exited {
 				return // its output is all drained
 			}
@@ -163,7 +172,10 @@ func relay(in, ctl int, winch chan os.Signal, resize func(), done chan error) {
 		}
 		if len(fds) > 1 && fds[1].Revents&unix.POLLIN != 0 {
 			if m, err := unix.Read(in, buf); m > 0 {
-				writeAll(ctl, buf[:m])
+				data := append(held, buf[:m]...)
+				k := completeLen(data)
+				writeAll(ctl, data[:k])
+				held = append(held[:0:0], data[k:]...)
 			} else if err != nil {
 				return
 			}
