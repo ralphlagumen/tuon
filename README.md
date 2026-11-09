@@ -49,7 +49,7 @@ cd tuon
 
 This builds `tuon`, its chat app `tuon-app` and its small Touch ID helper (`tuon-keyhelper`, which needs Apple's command line tools: `xcode-select --install`) into `~/.local/bin`, installs [Ghostty](https://ghostty.org) (the terminal that shows real photos) if you don't have it, then runs `tuon setup`.
 
-**Updating:** run `tuon update`. It downloads tuon fresh from GitHub into a temporary folder, installs the newest release tag signed by tuon's maintainer and skips anything unsigned, shows what changed, and asks before building if the update changes tuon's dependencies. Restart tuon afterwards if it was open.
+**Updating:** run `tuon update`. It downloads tuon fresh from GitHub into a temporary folder, installs the newest release tag signed by tuon's maintainer and skips anything unsigned, shows what changed, and asks before building if the update changes tuon's dependencies. Restart tuon afterwards if it was open. Coming from 0.3.0, run `tuon update` twice: the first run installs the new launcher, the second adds the chat app (`tuon-app`) next to it.
 
 **Linux:** `./install.sh` works the same, minus Ghostty. For photos, use kitty, Ghostty or WezTerm. For copy and paste, install `wl-clipboard` (Wayland) or `xclip` (X11).
 

@@ -132,7 +132,11 @@ func CreatePassphrase(dir, pass string) (*Vault, error) {
 	}
 	v.file = file{Kind: KindPassphrase, Salt: b64(salt), Time: 3, Memory: 64 * 1024, Threads: 4}
 	var err error
-	if v.file.Wrapped, err = wrap(v.file.passKEK(pass), v.key[:]); err != nil {
+	kek, err := v.file.passKEK(pass)
+	if err != nil {
+		return nil, err
+	}
+	if v.file.Wrapped, err = wrap(kek, v.key[:]); err != nil {
 		return nil, err
 	}
 	return v, v.save()
@@ -172,7 +176,11 @@ func UnlockPassphrase(dir, pass string) (*Vault, error) {
 	if f.Kind != KindPassphrase {
 		return nil, fmt.Errorf("this vault unlocks with %s", f.Kind)
 	}
-	v, err := open(dir, f, f.passKEK(pass))
+	kek, err := f.passKEK(pass)
+	if err != nil {
+		return nil, err
+	}
+	v, err := open(dir, f, kek)
 	if err != nil {
 		return nil, ErrWrongPassphrase
 	}
@@ -185,7 +193,11 @@ func (v *Vault) CheckPassphrase(pass string) bool {
 	if v.kind != KindPassphrase {
 		return false // a Touch ID vault has no passphrase (and no Argon2 settings to run)
 	}
-	_, err := open(v.dir, v.file, v.file.passKEK(pass))
+	kek, err := v.file.passKEK(pass)
+	if err != nil {
+		return false
+	}
+	_, err = open(v.dir, v.file, kek)
 	return err == nil
 }
 
@@ -284,10 +296,24 @@ func enclaveKEK(shared []byte) ([]byte, error) {
 	return hkdf.Key(sha256.New, shared, nil, "tuon vault v1", chacha20poly1305.KeySize)
 }
 
-func (f file) passKEK(pass string) []byte {
-	salt, _ := unb64(f.Salt)
-	return argon2.IDKey([]byte(pass), salt, f.Time, f.Memory, f.Threads, chacha20poly1305.KeySize)
+// passKEK stretches the passphrase with vault.json's Argon2 settings,
+// within sane bounds: vault.json is in a folder the sandboxed app can
+// write, and settings like 4 TiB of memory or 0 threads would crash the
+// launcher that unlocks it.
+func (f file) passKEK(pass string) ([]byte, error) {
+	if f.Time < 1 || f.Time > 10 || f.Memory < 8*1024 || f.Memory > 1024*1024 || f.Threads < 1 || f.Threads > 16 {
+		return nil, ErrBadSettings
+	}
+	salt, err := unb64(f.Salt)
+	if err != nil || len(salt) < 16 {
+		return nil, ErrBadSettings
+	}
+	return argon2.IDKey([]byte(pass), salt, f.Time, f.Memory, f.Threads, chacha20poly1305.KeySize), nil
 }
+
+// ErrBadSettings: vault.json's passphrase settings are outside what tuon
+// ever writes, so they were changed by something else.
+var ErrBadSettings = errors.New("vault.json has passphrase settings tuon never writes: it was changed by another program")
 
 func wrap(kek, key []byte) (string, error) {
 	aead, err := chacha20poly1305.NewX(kek)

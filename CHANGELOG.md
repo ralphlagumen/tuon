@@ -11,6 +11,7 @@ and versions follow [Semantic Versioning](https://semver.org/).
   once Messenger has opened in the window (not mid 2-factor). `tuon logout` deletes the profile. Still logged in
   there, the window opens and closes by itself: nothing to type.
 - `tuon login` opens tuon when it's done.
+- First run asks for Touch ID (or a new passphrase) once: the launcher sets up the lock and hands the key over.
 
 ### Fixed
 - `tuon history` no longer prints "zerolog: could not write event … file already closed" as it exits.
@@ -32,6 +33,10 @@ and versions follow [Semantic Versioning](https://semver.org/).
   Preview only) and saved files (shown in Finder) and reads pasted images and files for it, checking each request.
 - The chat app runs on a terminal of its own, which the launcher relays to yours, so it can't type into your shell
   after tuon quits (TIOCSTI). When it exits, the launcher stops anything it left running in its session.
+- Smaller hardening: Argon2 settings in `vault.json` are bounded (a planted file can't crash the launcher); the lock
+  file is never opened through a link; an inherited `TUON_SANDBOXED` can't switch the sandbox off, and tuon always
+  says when it runs unsandboxed (also when `tuon-app` is started directly); the launcher's dependency test is an
+  allowlist; a `tuon update` from a build made from source asks before installing a release.
 - brotli 1.2.4 → 1.2.7 (GO-2026-6888) and klauspost/compress 1.20.0 → 1.20.2 (GO-2026-6865): both were reachable
   from Messenger's compressed HTTP responses.
 

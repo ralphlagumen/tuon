@@ -15,7 +15,7 @@ func Lock() (release func(), err error) {
 	if err := os.MkdirAll(Dir(), 0o700); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(filepath.Join(Dir(), "tuon.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	f, err := os.OpenFile(filepath.Join(Dir(), "tuon.lock"), os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0o600) // never through a planted link
 	if err != nil {
 		return nil, err
 	}

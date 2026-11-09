@@ -32,6 +32,7 @@ import (
 
 func main() {
 	setUmask()
+	sandbox.ClearMark()
 	args := os.Args[1:]
 	if len(args) > 0 && args[0] == "update" { // needs to write tuon's own files: never sandboxed
 		if err := update(); err != nil {
@@ -91,7 +92,7 @@ func launch(app string, args []string) int {
 	var key []byte   // the unlocked vault's key, for the app
 	var login []byte // cookies from a browser login, for the app
 	for {
-		if key == nil && needsKey(args) && vault.Exists(paths.Dir()) {
+		if key == nil && needsKey(args) {
 			v, err := unlock()
 			if err != nil {
 				fmt.Fprintln(os.Stderr, "tuon:", err)
@@ -256,6 +257,9 @@ func wait(cmd *exec.Cmd) (int, error) {
 // Enclave helper, a passphrase otherwise. Creating it is the app's job.
 func unlock() (*vault.Vault, error) {
 	dir := paths.Dir()
+	if !vault.Exists(dir) {
+		return create(dir)
+	}
 	if vault.Kind(dir) == vault.KindEnclave {
 		h := vault.FindHelper()
 		if h == nil {
@@ -290,6 +294,62 @@ func unlock() (*vault.Vault, error) {
 		}
 	}
 	return nil, errors.New("too many wrong passphrases")
+}
+
+// create sets up the vault on first run (here, so the app gets the key
+// and a browser login in between doesn't ask for Touch ID twice): Touch ID
+// with the Secure Enclave helper, a passphrase otherwise.
+func create(dir string) (*vault.Vault, error) {
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		return nil, errors.New("tuon needs to set up its lock: run `tuon` in a terminal")
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	if h := vault.FindHelper(); h != nil {
+		fmt.Print(`
+  tuon now locks your chats. Your session, messages and keys are encrypted
+  with a key kept in this Mac's Secure Enclave, and opening tuon asks for
+  Touch ID or your Mac password. Other apps can't read them anymore.
+`)
+		v, err := vault.CreateEnclave(dir, h)
+		if err == nil {
+			fmt.Println("  Lock set up.")
+			return v, nil
+		}
+		fmt.Fprintln(os.Stderr, "  Touch ID lock unavailable:", err, "- using a passphrase instead.")
+	}
+	fmt.Print(`
+  Choose a passphrase for tuon. It encrypts your session, messages and keys
+  on this computer, and you'll type it when tuon opens. If you forget it,
+  you log in again and restore your history with your Messenger PIN.
+`)
+	for {
+		fmt.Print("  passphrase (8+ characters): ")
+		p1, err := term.ReadPassword(int(os.Stdin.Fd()))
+		fmt.Println()
+		if err != nil {
+			return nil, err
+		}
+		fmt.Print("  again: ")
+		p2, err := term.ReadPassword(int(os.Stdin.Fd()))
+		fmt.Println()
+		if err != nil {
+			return nil, err
+		}
+		if string(p1) != string(p2) {
+			fmt.Println("  They don't match. Try again.")
+			continue
+		}
+		v, err := vault.CreatePassphrase(dir, string(p1))
+		clear(p1)
+		clear(p2)
+		if err != nil {
+			fmt.Println(" ", err)
+			continue
+		}
+		return v, nil
+	}
 }
 
 // browserLogin runs the login window here, outside the sandbox, and

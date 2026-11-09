@@ -86,6 +86,11 @@ var allowExec = []string{
 	"/usr/bin/afplay", "/usr/bin/pbcopy", "/usr/bin/pbpaste", "/usr/bin/fdesetup",
 }
 
+// ClearMark forgets an inherited "already sandboxed" mark: the launcher
+// calls it first, so a mark planted in its environment can't make it
+// start the app unsandboxed (or make the app think it is sandboxed).
+func ClearMark() { os.Unsetenv(envMark) }
+
 // Active reports whether this process already runs sandboxed.
 func Active() bool { return os.Getenv(envMark) == "1" }
 

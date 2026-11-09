@@ -3,6 +3,8 @@ package vault
 import (
 	"crypto/ecdh"
 	"crypto/rand"
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -161,5 +163,31 @@ func TestEnclavePassphraseCheckRefuses(t *testing.T) {
 	}
 	if v.CheckPassphrase("") || v.CheckPassphrase("anything") {
 		t.Fatal("a Touch ID vault accepted a passphrase")
+	}
+}
+
+// TestPlantedArgonSettings: vault.json is writable by the sandboxed app; huge
+// or zero Argon2 settings must be refused, not crash the launcher.
+func TestPlantedArgonSettings(t *testing.T) {
+	for name, edit := range map[string]func(m map[string]any){
+		"4 TiB":     func(m map[string]any) { m["memory"] = 4294967295 },
+		"0 threads": func(m map[string]any) { delete(m, "threads") },
+		"0 time":    func(m map[string]any) { delete(m, "time") },
+		"no salt":   func(m map[string]any) { m["salt"] = "" },
+	} {
+		dir := t.TempDir()
+		if _, err := CreatePassphrase(dir, "correct horse battery"); err != nil {
+			t.Fatal(err)
+		}
+		p := filepath.Join(dir, "vault.json")
+		b, _ := os.ReadFile(p)
+		var m map[string]any
+		_ = json.Unmarshal(b, &m)
+		edit(m)
+		b, _ = json.Marshal(m)
+		_ = os.WriteFile(p, b, 0o600)
+		if _, err := UnlockPassphrase(dir, "correct horse battery"); !errors.Is(err, ErrBadSettings) {
+			t.Errorf("%s: got %v", name, err)
+		}
 	}
 }

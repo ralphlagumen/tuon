@@ -9,10 +9,11 @@ const sandboxExec = "/usr/bin/sandbox-exec"
 
 // Command builds the sandboxed chat app (app is tuon-app's path) for the
 // launcher to run as a child. It returns nil and the reason when there's
-// no sandbox to use (the reason is empty when you turned it off).
+// no sandbox to use. The launcher is never sandboxed itself, so an
+// inherited TUON_SANDBOXED (see ClearMark) can't switch this off.
 func Command(app string, args []string) (*exec.Cmd, string) {
-	if Active() || Disabled() {
-		return nil, ""
+	if Disabled() {
+		return nil, "sandbox off (TUON_NO_SANDBOX)"
 	}
 	if _, err := os.Stat(sandboxExec); err != nil {
 		return nil, "sandbox unavailable: " + err.Error()

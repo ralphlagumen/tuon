@@ -86,6 +86,15 @@ func update() error {
 		return nil
 	}
 	fmt.Printf("  Release %s, signed by tuon's maintainer.\n", tag)
+	if version == "dev" && appErr == nil {
+		// built from source: tuon can't tell whether tag is newer than what
+		// you have, so a repo that hid its newer tags could roll you back
+		fmt.Printf("  This tuon was built from source, so it can't tell whether %s is newer.\n", tag)
+		fmt.Print("  Type yes to install it: ")
+		if strings.TrimSpace(readLine()) != "yes" {
+			return errors.New("update cancelled")
+		}
+	}
 	if version != "dev" { // what changed since the installed release
 		if log, err := safeGit(repo, "log", "--oneline", "--no-decorate", version+".."+tag); err == nil && log != "" {
 			fmt.Println("  New:")

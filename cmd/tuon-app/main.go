@@ -10,6 +10,7 @@ import (
 	"github.com/ralph/tuon/internal/safefile"
 	"os"
 	"path/filepath"
+	"runtime"
 	"runtime/debug"
 	"sync"
 	"time"
@@ -34,6 +35,9 @@ func main() {
 	args := os.Args[1:]
 	privateFiles() // everything tuon writes is readable only by you
 	sandboxNote = os.Getenv(sandbox.NoteEnv)
+	if runtime.GOOS == "darwin" && !sandbox.Active() && sandboxNote == "" {
+		sandboxNote = "started without the launcher: run tuon, not tuon-app"
+	}
 	readHandedLogin() // a browser login the launcher just did, if any
 	if len(args) > 0 {
 		switch args[0] {
