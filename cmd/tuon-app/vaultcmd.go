@@ -87,7 +87,7 @@ func createVault(dir string) (*vault.Vault, error) {
   you log in again and restore your history with your Messenger PIN.
 `)
 	for {
-		fmt.Print("  passphrase (8+ characters): ")
+		fmt.Printf("  passphrase (%d+ characters): ", vault.MinPassphrase)
 		p1, err := term.ReadPassword(int(os.Stdin.Fd()))
 		fmt.Println()
 		if err != nil {
@@ -131,7 +131,7 @@ func unlockPassphrase(dir string) (*vault.Vault, error) {
 		if try < 5 {
 			wait := time.Duration(1<<(try-1)) * time.Second
 			fmt.Printf("  Wrong passphrase. Try again in %s.\n", wait)
-			time.Sleep(wait)
+			vault.QuietWait(int(os.Stdin.Fd()), wait) // typing now neither shows nor counts
 		}
 	}
 	return nil, errors.New("too many wrong passphrases")

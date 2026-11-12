@@ -117,10 +117,15 @@ func CreateEnclave(dir string, se Enclave) (*Vault, error) {
 	return v, v.save()
 }
 
+// MinPassphrase is the shortest passphrase tuon accepts (Ralph's choice,
+// 2026-11-12: 6). Against a copied vault.json, Argon2id slows guessing, but
+// only length and randomness really protect it.
+const MinPassphrase = 6
+
 // CreatePassphrase makes a new vault guarded by a passphrase.
 func CreatePassphrase(dir, pass string) (*Vault, error) {
-	if len([]rune(pass)) < 8 {
-		return nil, errors.New("use at least 8 characters")
+	if len([]rune(pass)) < MinPassphrase {
+		return nil, fmt.Errorf("use at least %d characters", MinPassphrase)
 	}
 	v := &Vault{kind: KindPassphrase, dir: dir}
 	if _, err := rand.Read(v.key[:]); err != nil {

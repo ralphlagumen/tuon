@@ -65,8 +65,8 @@ func TestEnclaveVault(t *testing.T) {
 
 func TestPassphraseVault(t *testing.T) {
 	dir := t.TempDir()
-	if _, err := CreatePassphrase(dir, "short"); err == nil {
-		t.Fatal("short passphrase accepted")
+	if _, err := CreatePassphrase(dir, "five5"); err == nil {
+		t.Fatal("5-character passphrase accepted")
 	}
 	v, err := CreatePassphrase(dir, "correct horse battery")
 	if err != nil {
@@ -189,5 +189,11 @@ func TestPlantedArgonSettings(t *testing.T) {
 		if _, err := UnlockPassphrase(dir, "correct horse battery"); !errors.Is(err, ErrBadSettings) {
 			t.Errorf("%s: got %v", name, err)
 		}
+	}
+}
+
+func TestSixCharacterPassphrase(t *testing.T) {
+	if _, err := CreatePassphrase(t.TempDir(), "six6six"[:6]); err != nil {
+		t.Fatalf("6 characters should be enough: %v", err)
 	}
 }
