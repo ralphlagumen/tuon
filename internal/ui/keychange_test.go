@@ -90,3 +90,26 @@ func TestWarningsStack(t *testing.T) {
 		t.Fatalf("after unwarn:\n%s", s)
 	}
 }
+
+// The kept chat lines follow changes that don't change the message count
+// (a new reaction), and wheel scrolling reuses them.
+func TestChatLinesCacheFollowsChanges(t *testing.T) {
+	m, _, _ := newTestModel(t, 110, 30)
+	m = seed(m)
+	m = key(m, "3")
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = run(next.(Model), cmd)
+	if strings.Contains(screen(m), "👍") {
+		t.Fatal("setup: no 👍 yet")
+	}
+	a, _ := m.chatLines()
+	b, _ := m.chatLines()
+	if &a[0] != &b[0] {
+		t.Fatal("nothing changed: lines should be reused")
+	}
+	next, cmd = m.Update(EventsMsg{connector.ReactionEvent{ChatID: "10", MessageID: "m2", ActorID: "100", Emoji: "👍"}})
+	m = run(next.(Model), cmd)
+	if !strings.Contains(screen(m), "👍") {
+		t.Fatalf("new reaction not shown (stale lines):\n%s", screen(m))
+	}
+}

@@ -102,7 +102,7 @@ type Model struct {
 	refilling    map[string]bool // chats waiting to refill a message that couldn't be decrypted
 	askedName    map[string]bool // senders whose name we already asked Messenger for
 	checkAt      time.Time       // a redraw is due then, to flip "sending…" to "not sent"
-	warnings  []string // lasting warnings, all shown (a security note must not hide another)
+	warnings     []string        // lasting warnings, all shown (a security note must not hide another)
 	keysWarn     string          // the decrypt warning, so it can be taken down when things recover
 	lock         lockConfig      // the lock screen, once main turns it on
 	locked       bool
@@ -129,9 +129,11 @@ type Model struct {
 	escAt     time.Time           // first esc on a non-empty box: a second one soon clears it
 	dragFrom  int                 // mouse press on a message (click); -1 = none
 	dragTo    int
-	dragMedia bool    // the press was on a photo, card or file
-	sel       textSel // highlighted text (drag to copy)
-	lastClick clicks  // for double and triple clicks
+	dragMedia bool        // the press was on a photo, card or file
+	sel       textSel     // highlighted text (drag to copy)
+	lines     *linesCache // chatLines, kept until what they're built from changes
+	msgsGen   int         // counts message reloads (for lines)
+	lastClick clicks      // for double and triple clicks
 	suggIdx   int
 	suggOff   bool // esc closed suggestions for this draft position
 
@@ -234,6 +236,7 @@ func New(ctx context.Context, st *store.Store, conn connector.Connector, platfor
 		draftAtts:  map[string][]pendingFile{},
 		drafts:     st.Drafts(), // text left unsent last time
 		dragFrom:   -1,
+		lines:      &linesCache{},
 		dragTo:     -1,
 		status:     "connecting…",
 	}
@@ -675,6 +678,7 @@ func (m *Model) reloadMessages() tea.Cmd {
 		m.chat = &c
 	}
 	m.msgs, _ = m.st.Messages(m.chat.ID, pageSize, m.conn.SelfID())
+	m.msgsGen++ // chatLines rebuilds
 	m.people, _ = m.st.People(m.chat.ID, m.conn.SelfID())
 	m.keepSelectionVisible()
 	lookup := tea.Batch(m.lookupNames(), m.notSentTimer())

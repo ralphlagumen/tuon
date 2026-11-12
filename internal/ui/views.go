@@ -566,6 +566,47 @@ const (
 // (yours in amber), text across the pane, time and reactions at the right
 // end. Returns, for each message, which lines it covers.
 func (m Model) chatLines() ([]string, []span) {
+	// A fast scroll is hundreds of wheel events, and each redraw rebuilt
+	// every message (~1 ms each with a full chat): tuon fell seconds behind
+	// and keys piled up (2026-11-12). The lines only change when what they
+	// are built from does, so they're kept until then. Not with real photos
+	// on screen: placing one has side effects.
+	if m.lines == nil || (m.kitty != nil && m.imagesOn) {
+		return m.buildChatLines()
+	}
+	key := m.linesKey()
+	if m.lines.key == key {
+		return m.lines.out, m.lines.spans
+	}
+	out, spans := m.buildChatLines()
+	m.lines.key, m.lines.out, m.lines.spans = key, out, spans
+	return out, spans
+}
+
+// linesCache: the last chatLines result and what it was built from.
+type linesCache struct {
+	key   string
+	out   []string
+	spans []span
+}
+
+// linesKey: everything chatLines depends on. The message list is only
+// ever replaced, by reloadMessages, which counts (msgsGen); times are
+// rounded to 5 s ("not sent", day labels).
+func (m Model) linesKey() string {
+	selected := -1
+	if m.selecting {
+		selected = m.selIndex()
+	}
+	chatID := ""
+	if m.chat != nil {
+		chatID = m.chat.ID
+	}
+	return fmt.Sprint(m.msgsGen, len(m.msgs), chatID, m.rightWidth(), selected, m.dragFrom, m.dragTo,
+		len(m.imgs), len(m.pending), len(m.failed), m.imagesOn, time.Now().Unix()/5)
+}
+
+func (m Model) buildChatLines() ([]string, []span) {
 	rw := m.rightWidth()
 	const nameW = 12
 	gutter := 1 + nameW + 2 // " name  "
