@@ -35,6 +35,7 @@ func main() {
 	args := os.Args[1:]
 	privateFiles()                           // everything tuon writes is readable only by you
 	proxyNote = proxyWarning(dropProxyEnv()) // before any connection: Go reads these once
+	dumpStacksOnSignal()                     // kill -USR1: goroutine stacks to tuon.log (freeze diagnosis)
 	sandboxNote = os.Getenv(sandbox.NoteEnv)
 	if runtime.GOOS == "darwin" && !sandbox.Active() && sandboxNote == "" {
 		sandboxNote = "started without the launcher: run tuon, not tuon-app"

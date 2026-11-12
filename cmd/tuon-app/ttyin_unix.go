@@ -30,7 +30,7 @@ type ttyIn struct {
 func (t *ttyIn) Read(p []byte) (n int, err error) {
 	n = copy(p, t.tail) // usually the start of a sequence whose rest is waiting
 	t.tail = t.tail[:0]
-	if n > 0 && !t.ready(25) {
+	if n > 0 && !t.ready(tailWait) {
 		// nothing followed: it was a real lone Esc at the end of a full read.
 		// Hand it over now; blocking here held it until the next key, so Esc
 		// pressed as a fast scroll stopped seemed to freeze tuon (audit A13-11)
@@ -62,6 +62,13 @@ func (t *ttyIn) Read(p []byte) (n int, err error) {
 	}
 	return n, err
 }
+
+// tailWait (ms): how long the start of a sequence kept from a full read
+// waits for its rest. Long: under load (a fast scroll redrawing) the rest
+// can take well over 25 ms, and handing the Esc over alone typed the rest
+// of a mouse report into the box ("[<65;133;59M", 2026-11-12). A real lone
+// Esc only lands here at the very end of a full read, and is then 0.2 s late.
+const tailWait = 200
 
 // ready: input is waiting (or comes within ms milliseconds).
 func (t *ttyIn) ready(ms int) bool {

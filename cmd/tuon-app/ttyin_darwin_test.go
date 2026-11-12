@@ -75,3 +75,32 @@ func TestTtyInLoneEscAtEndOfFullRead(t *testing.T) {
 		t.Fatal("the Esc was held until another key")
 	}
 }
+
+// The start of a mouse report kept from a full read waits for its rest even
+// when it comes late (a busy moment), instead of going alone as an Esc key.
+func TestTtyInTailWaitsForSlowRest(t *testing.T) {
+	ctl, app, err := openTestPty()
+	if err != nil {
+		t.Skip("no pty:", err)
+	}
+	defer ctl.Close()
+	defer app.Close()
+	if _, err := term.MakeRaw(int(app.Fd())); err != nil {
+		t.Fatal(err)
+	}
+	in := &ttyIn{File: app}
+	_, _ = ctl.Write([]byte(strings.Repeat("a", 255) + "\x1b"))
+	time.Sleep(20 * time.Millisecond)
+	p := make([]byte, 256)
+	if n, _ := in.Read(p); n != 255 {
+		t.Fatalf("first read = %d", n)
+	}
+	go func() {
+		time.Sleep(80 * time.Millisecond) // the rest comes late
+		_, _ = ctl.Write([]byte("[<65;133;59M"))
+	}()
+	n, _ := in.Read(p)
+	if got := string(p[:n]); got != "\x1b[<65;133;59M" {
+		t.Fatalf("second read = %q, want the whole report", got)
+	}
+}
