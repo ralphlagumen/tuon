@@ -149,7 +149,7 @@ From your shell:
 |---|---|
 | Memory, idle | 27 MB: launcher 4 MB + chat app 23 MB (41 MB resident) |
 | CPU, idle | under 1% |
-| Redraws while idle | none, apart from a backup check every few minutes while an encrypted message is still loading |
+| Redraws while idle | one every 20 seconds (the idle-lock check), plus a backup check every few minutes while an encrypted message is still loading |
 | Photos downloaded when opening a chat in Terminal.app | 0 (on click) |
 | Program size | launcher 3.4 MB, chat app 31 MB, Touch ID helper 63 KB |
 

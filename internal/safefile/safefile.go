@@ -58,3 +58,67 @@ func Append(path string, perm os.FileMode) (*os.File, error) {
 	}
 	return f, nil
 }
+
+// Shred overwrites a regular file with zeros, syncs, then removes it: the
+// old bytes don't stay readable in the file's blocks (audit 10-R11). On an
+// SSD with APFS the drive may still keep old copies elsewhere; FileVault is
+// what protects those. A link is removed, never followed; a missing file is
+// fine.
+func Shred(path string) error {
+	st, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if st.Mode().IsRegular() && st.Size() > 0 {
+		if f, err := os.OpenFile(path, os.O_WRONLY, 0); err == nil {
+			if fst, err := f.Stat(); err == nil && os.SameFile(st, fst) { // not swapped meanwhile
+				zero := make([]byte, 64<<10)
+				for left := st.Size(); left > 0; {
+					n := int64(len(zero))
+					if left < n {
+						n = left
+					}
+					if _, err := f.Write(zero[:n]); err != nil {
+						break
+					}
+					left -= n
+				}
+				_ = f.Sync()
+			}
+			f.Close()
+		}
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+// ShredAll shreds every file under path (or path itself), without following
+// links, then removes what's left.
+func ShredAll(path string) error {
+	st, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if st.IsDir() {
+		entries, err := os.ReadDir(path)
+		if err != nil {
+			return err
+		}
+		for _, e := range entries {
+			if err := ShredAll(path + string(os.PathSeparator) + e.Name()); err != nil {
+				return err
+			}
+		}
+	} else if err := Shred(path); err != nil {
+		return err
+	}
+	return os.RemoveAll(path)
+}

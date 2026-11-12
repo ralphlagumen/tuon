@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/ralph/tuon/internal/safefile"
 	"io"
 	"os"
 	"os/exec"
@@ -143,7 +144,7 @@ func needsKey(args []string) bool {
 // app can't: it's outside what the app may write).
 func forgetBrowser() {
 	if base := paths.WorkBase(); base != "" {
-		if err := os.RemoveAll(filepath.Join(base, browserlogin.ProfileName)); err == nil {
+		if err := safefile.ShredAll(filepath.Join(base, browserlogin.ProfileName)); err == nil { // its cookies, zeroed first
 			fmt.Println("  Deleted the login window's browser profile.")
 		}
 	}

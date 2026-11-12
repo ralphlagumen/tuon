@@ -10,7 +10,6 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/ralph/tuon/internal/connector"
 	"github.com/ralph/tuon/internal/connector/messenger"
 	"github.com/ralph/tuon/internal/store"
 )
@@ -147,24 +146,8 @@ func pinDigits(s string) string {
 // keep saves what arrives while `tuon history` runs.
 func keep(st *store.Store, conn *messenger.Conn) {
 	for e := range conn.Events() {
-		switch e := e.(type) {
-		case connector.ContactEvent:
-			_ = st.UpsertContact(e.ID, e.Name)
-		case connector.ChatAliasEvent:
-			_ = st.Merge(e.From, e.To)
-		case connector.ChatEvent:
-			e.Chat.ID = st.Resolve(e.Chat.ID)
-			_ = st.UpsertChat(e.Chat)
-		case connector.MessageEvent:
-			e.Message.ChatID = st.Resolve(e.Message.ChatID)
-			_, _ = st.AddMessage(e.Message, false)
-		case connector.ParticipantEvent:
-			e.ChatID = st.Resolve(e.ChatID)
-			_ = st.AddParticipant(e)
-		case connector.ReactionEvent:
-			e.ChatID = st.Resolve(e.ChatID)
-			_ = st.SetReaction(e)
-		}
+		st.Apply(e, "")
+		_ = st.MergeOneToOne()
 	}
 }
 

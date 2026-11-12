@@ -472,3 +472,23 @@ func TestMembersDropLeavers(t *testing.T) {
 		t.Fatalf("members = %v, %v; want just 2 (not me, not the leaver, not a past sender)", got, err)
 	}
 }
+
+// A tuon notice newer than the last real message doesn't make the chat look
+// up to date for the backup check (audit A13-8).
+func TestBehindIgnoresNotices(t *testing.T) {
+	st, err := OpenPath(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	t0 := time.Now().Add(-time.Hour)
+	if _, err := st.AddMessage(connector.Message{ID: "1", ChatID: "c", SenderID: "2", Text: "hi", Time: t0}, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddMessage(connector.KeyChangeNotice("c", "2", t0.Add(30*time.Minute)), false); err != nil {
+		t.Fatal(err)
+	}
+	if !st.Behind("c", t0.Add(10*time.Minute)) {
+		t.Fatal("a message at +10 min is newer than the last real one: should be behind")
+	}
+}

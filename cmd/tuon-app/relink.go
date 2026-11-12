@@ -3,7 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
-	"os"
+	"github.com/ralph/tuon/internal/safefile"
 	"strings"
 
 	"github.com/ralph/tuon/internal/keystore"
@@ -62,7 +62,7 @@ func forgetDevice() error {
 	}
 	dir := store.Dir()
 	for _, f := range []string{"keys.db", "keys.db-wal", "keys.db-shm"} {
-		if err := os.Remove(dir + "/" + f); err != nil && !os.IsNotExist(err) {
+		if err := safefile.Shred(dir + "/" + f); err != nil { // the old device's keys, zeroed first
 			return err
 		}
 	}

@@ -1705,6 +1705,22 @@ func TestSeenReceipts(t *testing.T) {
 		t.Fatalf("unlocking should send the receipt now, got %v", fc.read)
 	}
 
+	// terminal in the background: nothing sent; back in front: sent (A13-4)
+	next, _ = m.Update(tea.BlurMsg{})
+	m = next.(Model)
+	next, cmd = m.Update(EventsMsg{connector.MessageEvent{Message: connector.Message{ID: "m8", ChatID: "10", SenderID: "100", Text: "hello?", Time: now.Add(2500 * time.Millisecond)}}})
+	m = run(next.(Model), cmd)
+	for _, r := range fc.read {
+		if r == "10/m8" {
+			t.Fatalf("receipt sent while the window was in the background: %v", fc.read)
+		}
+	}
+	next, cmd = m.Update(tea.FocusMsg{})
+	m = run(next.(Model), cmd)
+	if fc.read[len(fc.read)-1] != "10/m8" {
+		t.Fatalf("coming back should send it, got %v", fc.read)
+	}
+
 	// a placeholder (still loading) is never sent as read (A13-3)
 	// (not run(): a placeholder starts backup refills on timers)
 	next, _ = m.Update(EventsMsg{connector.MessageEvent{Message: connector.Message{ID: "m7", ChatID: "10", SenderID: "100", Time: now.Add(3 * time.Second), Media: []connector.Media{{Kind: connector.Missing}}}}})

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/ralph/tuon/internal/safefile"
 	"os"
 	"path/filepath"
 	"strings"
@@ -271,11 +272,29 @@ func encryptFile(path, hexKey string) error {
 	}
 	plain.Close()
 	_ = os.Chmod(tmp, 0o600)
+	// hold the plain file open across the rename, then zero it: renaming
+	// over it only drops its name, its blocks keep every message (10-R11)
+	old, _ := os.OpenFile(path, os.O_WRONLY, 0)
 	if err := os.Rename(tmp, path); err != nil {
+		if old != nil {
+			old.Close()
+		}
 		return err
 	}
+	if old != nil {
+		if st, err := old.Stat(); err == nil {
+			zero := make([]byte, 64<<10)
+			for left := st.Size(); left > 0; left -= int64(len(zero)) {
+				if _, err := old.Write(zero[:min(int64(len(zero)), left)]); err != nil {
+					break
+				}
+			}
+			_ = old.Sync()
+		}
+		old.Close()
+	}
 	for _, f := range []string{path + "-wal", path + "-shm", tmp + "-wal", tmp + "-shm"} {
-		_ = os.Remove(f)
+		_ = safefile.Shred(f)
 	}
 	return nil
 }
@@ -464,7 +483,9 @@ func IsMissing(media []connector.Media) bool {
 // newest stored message: something arrived that we don't have yet.
 func (s *Store) Behind(chatID string, activity time.Time) bool {
 	var newest sql.NullInt64
-	_ = s.DB.QueryRow(`SELECT MAX(ts) FROM tuon_messages WHERE chat_id = ?`, chatID).Scan(&newest)
+	// tuon's own notices (IDs "tuon-…") aren't messages: a key-change line
+	// newer than a lost message must not hide it from the backup check
+	_ = s.DB.QueryRow(`SELECT MAX(ts) FROM tuon_messages WHERE chat_id = ? AND id NOT LIKE 'tuon-%'`, chatID).Scan(&newest)
 	return newest.Valid && activity.UnixMilli() > newest.Int64+1000
 }
 
@@ -1274,3 +1295,41 @@ GROUP BY c.id HAVING COUNT(*) = 1 AND MIN(p.user_id) <> c.id`, s.Self)
 
 // ErrRunning means another tuon already has the data folder open.
 var ErrRunning = paths.ErrRunning
+
+// Apply stores one connector event: the storage half of handling it, shared
+// by the app and `tuon history` so they can't drift (audit 01-G10). openID
+// is the chat on screen (its new messages arrive read); "" for none. For a
+// message it reports whether it was new. The caller handles what's on
+// screen (unread state, refills, sounds, drafts).
+func (s *Store) Apply(e any, openID string) (isNew bool) {
+	switch e := e.(type) {
+	case connector.ContactEvent:
+		_ = s.UpsertContact(e.ID, e.Name)
+	case connector.ChatAliasEvent:
+		_ = s.Merge(e.From, e.To)
+	case connector.ChatEvent:
+		e.Chat.ID = s.Resolve(e.Chat.ID)
+		if e.Chat.ID == openID {
+			e.Chat.Unread = false
+		}
+		_ = s.UpsertChat(e.Chat)
+	case connector.MessageEvent:
+		e.Message.ChatID = s.Resolve(e.Message.ChatID)
+		isNew, _ = s.AddMessage(e.Message, e.Message.ChatID == openID)
+	case connector.MessageRemovedEvent:
+		_ = s.RemoveMessage(e.ID)
+	case connector.ReactionEvent:
+		e.ChatID = s.Resolve(e.ChatID)
+		_ = s.SetReaction(e)
+	case connector.ParticipantEvent:
+		e.ChatID = s.Resolve(e.ChatID)
+		_ = s.AddParticipant(e)
+	case connector.KeyChangeEvent:
+		chats, _ := s.EncryptedChatsWith(e.UserID)
+		for _, id := range chats {
+			// local time: the server's could be backdated to hide it up in the history (A13-10)
+			_, _ = s.AddMessage(connector.KeyChangeNotice(id, e.UserID, time.Now()), id == openID)
+		}
+	}
+	return isNew
+}

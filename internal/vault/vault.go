@@ -288,11 +288,7 @@ func (v *Vault) IsSealed(s string) bool { return Sealed(s) }
 
 // Remove deletes the vault file (logout --wipe).
 func Remove(dir string) error {
-	err := os.Remove(filepath.Join(dir, fileName))
-	if os.IsNotExist(err) {
-		return nil
-	}
-	return err
+	return safefile.Shred(filepath.Join(dir, fileName)) // zeroed first (10-R11)
 }
 
 // ---- internals ----

@@ -103,7 +103,7 @@ func Delete(dir string) error {
 	_ = keyringDelete(service, account)
 	var err error
 	for _, p := range []string{filePath(dir), legacyPath(dir), sealedPath(dir)} {
-		if e := os.Remove(p); e != nil && !os.IsNotExist(e) {
+		if e := safefile.Shred(p); e != nil { // the session, zeroed first (10-R11)
 			err = e
 		}
 	}

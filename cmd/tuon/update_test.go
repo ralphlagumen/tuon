@@ -39,3 +39,15 @@ func TestWithTmp(t *testing.T) {
 		}
 	}
 }
+
+func TestUpdateToolsIgnoreProxy(t *testing.T) {
+	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:9")
+	t.Setenv("all_proxy", "socks5://127.0.0.1:9")
+	for _, env := range [][]string{safeGitEnv(), goCmd(".", "version").Env} {
+		for _, kv := range env {
+			if isProxyVar(kv) {
+				t.Fatalf("proxy setting passed to an update tool: %s", kv)
+			}
+		}
+	}
+}

@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/ralph/tuon/internal/safefile"
 	"net/url"
 	"os"
 	"os/exec"
@@ -38,7 +39,9 @@ func FindBrowser() string {
 	var paths []string
 	switch runtime.GOOS {
 	case "darwin":
-		for _, app := range []string{"Google Chrome", "Microsoft Edge", "Brave Browser", "Chromium", "Arc"} {
+		// not Arc: it manages its own profiles, and nobody checked that it
+		// keeps the login window in tuon's separate profile (audit 01-G8)
+		for _, app := range []string{"Google Chrome", "Microsoft Edge", "Brave Browser", "Chromium"} {
 			paths = append(paths, "/Applications/"+app+".app/Contents/MacOS/"+app)
 		}
 	case "windows":
@@ -73,7 +76,7 @@ func removeStaleProfiles(base string) {
 	old, _ := filepath.Glob(filepath.Join(base, "tuon-login-*"))
 	for _, p := range old {
 		if st, err := os.Stat(p); err == nil && time.Since(st.ModTime()) > 10*time.Minute {
-			_ = os.RemoveAll(p)
+			_ = safefile.ShredAll(p) // a login's cookies: zeroed first
 		}
 	}
 }

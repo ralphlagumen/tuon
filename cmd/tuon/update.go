@@ -303,18 +303,34 @@ func safeGitEnv() []string {
 var toolTmp string
 
 // withTmp points the tools' temp files into toolTmp, away from the shared
-// temp folder the sandboxed app can write.
+// temp folder the sandboxed app can write, and drops proxy settings: git
+// and go fetch directly, like tuon-app (audit A13-12). Signed tags and
+// go.sum already stop a proxy changing what installs; this keeps it from
+// seeing the fetch too.
 func withTmp(env []string) []string {
-	if toolTmp == "" {
-		return env
+	var out []string
+	if toolTmp != "" {
+		out = []string{"TMPDIR=" + toolTmp, "GOTMPDIR=" + toolTmp}
 	}
-	out := []string{"TMPDIR=" + toolTmp, "GOTMPDIR=" + toolTmp}
 	for _, kv := range env {
-		if !strings.HasPrefix(kv, "TMPDIR=") && !strings.HasPrefix(kv, "GOTMPDIR=") {
-			out = append(out, kv)
+		if toolTmp != "" && (strings.HasPrefix(kv, "TMPDIR=") || strings.HasPrefix(kv, "GOTMPDIR=")) {
+			continue
 		}
+		if isProxyVar(kv) {
+			continue
+		}
+		out = append(out, kv)
 	}
 	return out
+}
+
+func isProxyVar(kv string) bool {
+	name, _, _ := strings.Cut(kv, "=")
+	switch strings.ToUpper(name) {
+	case "HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY":
+		return true
+	}
+	return false
 }
 
 // goCmd runs go in the exported release with workspace files and local

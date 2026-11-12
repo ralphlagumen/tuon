@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/ralph/tuon/internal/safefile"
 	"io"
 	"os"
 	"path/filepath"
@@ -263,7 +264,7 @@ func sameAccount(creds auth.Creds) (bool, error) {
 		return false, nil
 	}
 	for _, name := range []string{"tuon.db", "tuon.db-wal", "tuon.db-shm", "keys.db", "keys.db-wal", "keys.db-shm", "cache"} {
-		if err := os.RemoveAll(filepath.Join(store.Dir(), name)); err != nil {
+		if err := safefile.ShredAll(filepath.Join(store.Dir(), name)); err != nil { // zeroed first (10-R11)
 			return false, err
 		}
 	}
@@ -293,7 +294,7 @@ func logout(wipe bool) error {
 		return nil
 	}
 	cleanTemp()
-	if err := os.RemoveAll(store.Dir()); err != nil {
+	if err := safefile.ShredAll(store.Dir()); err != nil { // zeroed first (10-R11)
 		return err
 	}
 	fmt.Println("  Deleted.")
@@ -334,7 +335,7 @@ func cleanTemp() { _ = os.RemoveAll(filepath.Join(os.TempDir(), "tuon")) }
 // plain PNG photo cache (photos now go to the terminal without touching the
 // disk) and `source`, the clone path `tuon update` no longer trusts.
 func removeRetired() {
-	_ = os.RemoveAll(filepath.Join(store.Dir(), "cache", "img"))
+	_ = safefile.ShredAll(filepath.Join(store.Dir(), "cache", "img")) // plain PNGs: zeroed first
 	_ = os.Remove(filepath.Join(store.Dir(), "source"))
 }
 

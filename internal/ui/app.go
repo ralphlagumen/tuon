@@ -132,6 +132,7 @@ type Model struct {
 	dragMedia bool        // the press was on a photo, card or file
 	sel       textSel     // highlighted text (drag to copy)
 	lines     *linesCache // chatLines, kept until what they're built from changes
+	away      bool        // the terminal window is in the background (focus reports)
 	msgsGen   int         // counts message reloads (for lines)
 	lastClick clicks      // for double and triple clicks
 	suggIdx   int
@@ -343,6 +344,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case EventsMsg:
 		return m, m.applyEvents(msg)
 
+	case tea.BlurMsg: // the terminal window went to the background
+		m.away = true
+		return m, nil
+	case tea.FocusMsg: // back: what's open is read now
+		m.away = false
+		if m.chat != nil && m.focus == focusChat && !m.locked {
+			_ = m.st.MarkRead(m.chat.ID)
+			m.reloadChats()
+			return m, tea.Batch(m.reloadMessages(), m.sendRead(true))
+		}
+		return m, nil
+
 	case mediaMsg:
 		delete(m.pending, msg.ref)
 		if msg.err != nil {
@@ -542,18 +555,19 @@ func (m *Model) flash(text string) tea.Cmd {
 func (m *Model) applyEvents(evts []any) tea.Cmd {
 	openID := "" // a chat you're in (not just previewing) stays read
 	// while locked you aren't reading: nothing is marked read here or sent
-	// to Meta as "Seen" (audit A13-1); unlocking does that for the open chat
-	if m.chat != nil && m.focus == focusChat && !m.locked {
+	// to Meta as "Seen" (audit A13-1); unlocking does that for the open chat.
+	// Same while the terminal window is in the background (A13-4).
+	if m.chat != nil && m.focus == focusChat && !m.locked && !m.away {
 		openID = m.chat.ID
 	}
 	chime := false
 	var refills []tea.Cmd
 	for _, e := range evts {
 		switch e := e.(type) {
-		case connector.ContactEvent:
-			_ = m.st.UpsertContact(e.ID, e.Name)
+		case connector.ContactEvent, connector.MessageRemovedEvent, connector.ReactionEvent, connector.ParticipantEvent:
+			m.st.Apply(e, openID)
 		case connector.ChatAliasEvent:
-			_ = m.st.Merge(e.From, e.To)
+			m.st.Apply(e, openID)
 			if d, ok := m.drafts[e.From]; ok { // an unsent draft follows its chat
 				to := m.st.Resolve(e.To)
 				if m.drafts[to] == "" {
@@ -564,10 +578,7 @@ func (m *Model) applyEvents(evts []any) tea.Cmd {
 			}
 		case connector.ChatEvent:
 			e.Chat.ID = m.st.Resolve(e.Chat.ID)
-			if e.Chat.ID == openID {
-				e.Chat.Unread = false
-			}
-			_ = m.st.UpsertChat(e.Chat)
+			m.st.Apply(e, openID)
 			// Messenger says an encrypted chat moved on, but no message came
 			// through the encrypted connection: fetch it from the backup.
 			if c, err := m.st.Chat(e.Chat.ID); err == nil && c.Encrypted && e.Chat.LastActivity.After(m.started) &&
@@ -576,7 +587,7 @@ func (m *Model) applyEvents(evts []any) tea.Cmd {
 			}
 		case connector.MessageEvent:
 			e.Message.ChatID = m.st.Resolve(e.Message.ChatID)
-			isNew, _ := m.st.AddMessage(e.Message, e.Message.ChatID == openID)
+			isNew := m.st.Apply(e, openID)
 			if isNew && store.IsMissing(e.Message.Media) {
 				refills = append(refills, m.startRefill(e.Message.ChatID))
 			}
@@ -585,21 +596,9 @@ func (m *Model) applyEvents(evts []any) tea.Cmd {
 					chime = true
 				}
 			}
-		case connector.MessageRemovedEvent:
-			_ = m.st.RemoveMessage(e.ID)
-		case connector.ReactionEvent:
-			e.ChatID = m.st.Resolve(e.ChatID)
-			_ = m.st.SetReaction(e)
-		case connector.ParticipantEvent:
-			e.ChatID = m.st.Resolve(e.ChatID)
-			_ = m.st.AddParticipant(e)
 		case connector.KeyChangeEvent:
-			chats, _ := m.st.EncryptedChatsWith(e.UserID)
-			for _, id := range chats {
-				// local time: the server's could be backdated to hide it up in the history (A13-10)
-				_, _ = m.st.AddMessage(connector.KeyChangeNotice(id, e.UserID, time.Now()), id == openID)
-			}
-			if len(chats) > 0 {
+			m.st.Apply(e, openID)
+			if chats, _ := m.st.EncryptedChatsWith(e.UserID); len(chats) > 0 {
 				who := e.UserID
 				if c, err := m.st.Chat(m.st.Resolve(e.UserID)); err == nil && c.Display != "" {
 					who = c.Display
@@ -1715,7 +1714,7 @@ func (m Model) finishFolderName(name string) (tea.Model, tea.Cmd) {
 // chat opens this run, only an unread chat sends anything (a read one is
 // already read everywhere). Needs m.msgs loaded.
 func (m *Model) sendRead(wasUnread bool) tea.Cmd {
-	if m.chat == nil || m.locked {
+	if m.chat == nil || m.locked || m.away {
 		return nil
 	}
 	if m.readUpTo == nil {
