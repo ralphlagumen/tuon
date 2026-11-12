@@ -29,7 +29,7 @@ It's a personal tool that talks to Messenger the unofficial way. Read [Before yo
 - **Encrypted 1:1 and group chats**, sending and receiving, including replies, @mentions, reactions and files.
 - **Real photos** in Ghostty, kitty and WezTerm. Other terminals show a `View photo` button that opens the photo in your viewer, with several photos opening as a gallery.
 - **Files** people send you save to your Downloads folder with one key. Tuon never opens or runs them.
-- **Keyboard first**, with the mouse working too: click a chat to open it, click a photo to view it, drag over messages to copy them.
+- **Keyboard first**, with the mouse working too: click a chat to open it, click a photo to view it, drag over any text (a message or your draft) to highlight and copy it, double-click for a word, triple-click for a line.
 - **Quiet by default.** One soft sound for new messages, which you can change or turn off.
 - **Read on every device.** A chat you open in tuon shows as read on your phone and the web, and people see you've seen their messages. `:seen off` keeps your reading private (then your phone still shows those chats unread).
 - **Locked and encrypted.** Opening tuon asks for Touch ID (or a passphrase off macOS), it locks itself when idle, and your session, messages and keys are encrypted on disk. On macOS the chat app runs in a sandbox that keeps it away from common secret stores. See [SECURITY.md](SECURITY.md), including what it doesn't protect yet.

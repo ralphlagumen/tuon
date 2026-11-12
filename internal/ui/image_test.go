@@ -9,6 +9,8 @@ import (
 )
 
 func TestTermSafe(t *testing.T) {
+	defer func(v bool) { appleTerminal = v }(appleTerminal)
+	appleTerminal = false // Terminal.app's color-emoji path: TestTermSafeHeart
 	cases := map[string]string{
 		"Cubes❄️💙":   "Cubes❄ 💙", // narrow symbol + marker -> symbol + space
 		"✨ ICE":      "✨ ICE",    // no marker, untouched

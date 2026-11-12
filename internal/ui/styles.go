@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -48,12 +49,19 @@ var (
 	sMineSel   = lipgloss.NewStyle().Foreground(lipgloss.Color(cText)).Background(lipgloss.Color(cMineSel))
 	sSelBand   = lipgloss.NewStyle().Background(lipgloss.Color(cSelBand))
 	sChip      = lipgloss.NewStyle().Foreground(lipgloss.Color(cMuted))
+	sPill      = lipgloss.NewStyle().Foreground(lipgloss.Color(cText)).Background(lipgloss.Color(cTheirs))
 )
 
 // sBadge: an unread count, dark on amber
 var sBadge = lipgloss.NewStyle().Foreground(lipgloss.Color(cInk)).Background(lipgloss.Color(cAccent)).Bold(true)
 
 const unreadDot = "●"
+
+// groupMark follows a group chat's name in the list: one cell wide, a bit
+// brighter than muted so it can be spotted, quieter than the name.
+const groupMark = "⁂"
+
+var sGroupMark = lipgloss.NewStyle().Foreground(lipgloss.Color("#C9D1DC"))
 
 // Each person in a group gets a steady name color, so you can tell who is
 // talking at a glance. All read well on the ink background.
@@ -154,10 +162,26 @@ func firstName(s string) string {
 	return s
 }
 
+// appleTerminal: macOS Terminal.app, which draws "❤️" 2 cells wide but moves
+// the cursor only 1.
+var appleTerminal = os.Getenv("TERM_PROGRAM") == "Apple_Terminal"
+
+// emojiStyle keeps "❤️" (narrow symbol + U+FE0F) a color emoji in
+// Terminal.app: clear its 2 cells (ECH, cursor stays), draw it, then step
+// over the second cell (CUF). Escapes have no width, so Tuon counts 2
+// cells and the terminal moves 2: nothing drifts.
+const emojiPre, emojiPost = "\x1b[2X", "\x1b[C"
+
+// colorBare: symbols people mean as emoji even without U+FE0F (❤ is
+// Messenger's heart reaction). Terminal.app shows them as color emoji.
+var colorBare = map[rune]bool{'❤': true, '❣': true, '☺': true, '☹': true, '✌': true, '☝': true, '❄': true, '☀': true}
+
 // termSafe makes emoji take the width Tuon expects, so lines never wrap
 // and the screen never drifts.
 //   - "❄️" (narrow symbol + U+FE0F "emoji style") is drawn 2 cells wide but
-//     advances 1 in Terminal.app: the marker becomes a real space.
+//     advances 1 in Terminal.app: there it is drawn as a color emoji with a
+//     cursor step after it (emojiStyle); elsewhere the marker becomes a
+//     real space (text-style symbol).
 //   - Joiners (U+200D), skin tones, keycap marks and U+FE0E are dropped, so
 //     each emoji stands alone: a family shows as its people, 👍🏽 as 👍.
 func termSafe(s string) string {
@@ -165,10 +189,20 @@ func termSafe(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
 	var prev rune
-	for _, r := range s {
+	rs := []rune(s)
+	for i, r := range rs {
+		marked := i+1 < len(rs) && rs[i+1] == '\uFE0F'
+		narrowEmoji := marked && r > '~' && ansi.StringWidth(string(r)) == 1 ||
+			!marked && colorBare[r] // Messenger's heart reaction is a bare ❤
 		switch {
+		case narrowEmoji && appleTerminal:
+			b.WriteString(emojiPre)
+			b.WriteRune(r)
+			b.WriteString("\uFE0F" + emojiPost)
+			prev = '\uFE0F'
+			continue
 		case r == '\uFE0F':
-			if prev != 0 && ansi.StringWidth(string(prev)) == 1 {
+			if prev != '\uFE0F' && prev != 0 && ansi.StringWidth(string(prev)) == 1 {
 				b.WriteRune(' ')
 			}
 			continue

@@ -75,6 +75,10 @@ type ReplyRef struct {
 type Mention struct {
 	UserID string
 	Name   string
+	// Everyone tags the whole group ("@everyone"): UserID is the chat ID,
+	// Members the people in it (encrypted groups tag each of them).
+	Everyone bool
+	Members  []string
 }
 
 // Person is someone (or, with Group, a group chat) found by a search.

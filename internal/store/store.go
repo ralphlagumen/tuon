@@ -91,6 +91,7 @@ type ReactionCount struct {
 	Emoji string
 	Count int
 	Mine  bool
+	Names []string // who reacted, oldest first; "You" for us, "" if unknown
 }
 
 // Person is someone you can @mention in a chat, or a search result
@@ -748,8 +749,12 @@ func (s *Store) attachReactions(chatID, selfID string, msgs []MessageRow) error 
 	for i, m := range msgs {
 		idx[m.ID] = i
 	}
-	rows, err := s.DB.Query(`SELECT message_id, emoji, COUNT(*), MAX(actor_id = ?), MIN(rowid)
-FROM tuon_reactions WHERE chat_id = ? GROUP BY message_id, emoji ORDER BY 5`, selfID, chatID)
+	rows, err := s.DB.Query(`SELECT r.message_id, r.emoji, COUNT(*), MAX(r.actor_id = ?1), MIN(r.rowid),
+	GROUP_CONCAT(CASE WHEN r.actor_id = ?1 THEN 'You' ELSE COALESCE(NULLIF(p.nickname, ''), ct.name, '') END, char(31))
+FROM tuon_reactions r
+LEFT JOIN tuon_participants p ON p.chat_id = r.chat_id AND p.user_id = r.actor_id
+LEFT JOIN tuon_contacts ct ON ct.id = r.actor_id
+WHERE r.chat_id = ?2 GROUP BY r.message_id, r.emoji ORDER BY 5`, selfID, chatID)
 	if err != nil {
 		return err
 	}
@@ -758,9 +763,11 @@ FROM tuon_reactions WHERE chat_id = ? GROUP BY message_id, emoji ORDER BY 5`, se
 		var mid string
 		var rc ReactionCount
 		var first int64
-		if err := rows.Scan(&mid, &rc.Emoji, &rc.Count, &rc.Mine, &first); err != nil {
+		var names string
+		if err := rows.Scan(&mid, &rc.Emoji, &rc.Count, &rc.Mine, &first, &names); err != nil {
 			return err
 		}
+		rc.Names = strings.Split(names, "\x1f")
 		if i, ok := idx[mid]; ok {
 			msgs[i].Reactions = append(msgs[i].Reactions, rc)
 			if rc.Mine {

@@ -32,10 +32,11 @@ var sendTimeout = 45 * time.Second // tests shorten it
 // suggestion is one row in the pop-up above the message box: a person to
 // tag, or a file or folder to attach.
 type suggestion struct {
-	Label  string
-	Person *store.Person
-	Path   string
-	IsDir  bool
+	Label    string
+	Person   *store.Person
+	Path     string
+	IsDir    bool
+	Everyone bool // "@everyone" in a group chat
 }
 
 type (

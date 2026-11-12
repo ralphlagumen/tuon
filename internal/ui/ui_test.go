@@ -234,11 +234,19 @@ func TestFlow(t *testing.T) {
 	if mustChat(t, st, "10").Unread {
 		t.Fatal("opening a chat should mark it read")
 	}
-	// mine is right-aligned, theirs left
-	for _, l := range strings.Split(s, "\n") {
-		if strings.Contains(l, "pushed the fix") && !strings.Contains(l, "😆 2") {
-			t.Fatalf("reaction should sit at the end of its row: %q", l)
+	// reactions sit on a small line right under their message, no marker
+	col := func(s, sub string) int { return ansi.StringWidth(s[:max(0, strings.Index(s, sub))]) }
+	lines := strings.Split(s, "\n")
+	for i, l := range lines {
+		if strings.Contains(l, "pushed the fix") {
+			under := ansi.Strip(lines[i+1])
+			if strings.Contains(l, "😆") || !strings.Contains(under, "😆 2") || strings.Contains(under, "•") ||
+				col(under, "😆") != col(ansi.Strip(l), "pushed")+1 { // +1: the pill's inner space
+				t.Fatalf("reaction should be under the message text:\n%s\n%s", l, lines[i+1])
+			}
 		}
+	}
+	for _, l := range lines {
 		if strings.Contains(l, "thanks, ping me") && !strings.Contains(l, "You") {
 			t.Fatalf("my messages are labeled You: %q", l)
 		}
@@ -270,6 +278,9 @@ func TestFlow(t *testing.T) {
 	if s := screen(m); !strings.Contains(s, "▎Mark          pushed the fix") {
 		t.Fatalf("selection marker missing:\n%s", s)
 	}
+	if s := screen(m); !strings.Contains(s, "😆 Jen, Mark") {
+		t.Fatalf("picked message should say who reacted:\n%s", s)
+	}
 	m = key(m, "r")
 	if s := screen(m); !strings.Contains(s, "1 ❤") || !strings.Contains(s, "6 👍") {
 		t.Fatalf("picker missing:\n%s", s)
@@ -300,6 +311,24 @@ func TestFlow(t *testing.T) {
 	m = run(next.(Model), cmd)
 	if len(fc.sent) != 1 || fc.sent[0].text != "hi @Jen Cruz see this" ||
 		len(fc.sent[0].mentions) != 1 || fc.sent[0].mentions[0].UserID != "200" {
+		t.Fatalf("sent = %+v", fc.sent)
+	}
+
+	// @everyone in a group: "@ev" suggests it, tab picks it; a person
+	// tagged before it stays first.
+	m = typeText(m, "@je")
+	m = key(m, "tab")
+	m = typeText(m, "and @ev")
+	if s := screen(m); !strings.Contains(s, "@everyone") {
+		t.Fatalf("@everyone suggestion missing:\n%s", s)
+	}
+	m = key(m, "tab")
+	m = typeText(m, "lunch?")
+	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = run(next.(Model), cmd)
+	if len(fc.sent) != 2 || fc.sent[1].text != "@Jen Cruz and @everyone lunch?" || len(fc.sent[1].mentions) != 2 ||
+		fc.sent[1].mentions[0].UserID != "200" || !fc.sent[1].mentions[1].Everyone || fc.sent[1].mentions[1].UserID != "10" ||
+		len(fc.sent[1].mentions[1].Members) == 0 {
 		t.Fatalf("sent = %+v", fc.sent)
 	}
 
@@ -1640,5 +1669,40 @@ func TestSeenReceipts(t *testing.T) {
 	m = run(next.(Model), cmd)
 	if len(fc.read) != 3 {
 		t.Fatalf(":seen off should send nothing, got %v", fc.read)
+	}
+}
+
+// A group chat shows its mark right after the name; a 1:1 has none, and
+// every row keeps its exact width (no drift), even with a long name.
+func TestGroupMark(t *testing.T) {
+	m, _, _ := newTestModel(t, 100, 30)
+	const lw = 30
+	for _, tc := range []struct {
+		name  string
+		group bool
+	}{{"Barkada", true}, {"A very long group chat name indeed", true}, {"Raine Cruz", false}} {
+		c := store.ChatRow{Chat: connector.Chat{ID: "1", Group: tc.group}, Display: tc.name}
+		lines := m.chatRow(c, false, lw)
+		plain := ansi.Strip(lines[0])
+		if got := strings.Contains(plain, groupMark); got != tc.group {
+			t.Errorf("%q: mark shown = %v, want %v: %q", tc.name, got, tc.group, plain)
+		}
+		if w := ansi.StringWidth(lines[0]); w != lw {
+			t.Errorf("%q: row width %d, want %d: %q", tc.name, w, lw, plain)
+		}
+		if tc.group && tc.name == "Barkada" && !strings.Contains(plain, "Barkada "+groupMark) {
+			t.Errorf("mark not right after the name: %q", plain)
+		}
+	}
+}
+
+func TestHasEveryone(t *testing.T) {
+	for text, want := range map[string]bool{
+		"@everyone": true, "hi @everyone!": true, "a\n@everyone lunch": true,
+		"@everyones": false, "mail@everyone": false, "everyone": false, "@Everyone": false,
+	} {
+		if got := hasEveryone(text); got != want {
+			t.Errorf("hasEveryone(%q) = %v, want %v", text, got, want)
+		}
 	}
 }

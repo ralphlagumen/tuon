@@ -941,11 +941,15 @@ func lsMentions(text string, mentions []connector.Mention) socket.Mentions {
 			continue
 		}
 		i += from
+		typ := socket.MentionTypePerson
+		if m.Everyone { // Messenger's @everyone: type "t", the ID is the chat
+			typ = socket.MentionTypeThread
+		}
 		out = append(out, socket.Mention{
 			ID:     uid,
 			Offset: len(utf16.Encode([]rune(text[:i]))),
 			Length: len(utf16.Encode([]rune(tag))),
-			Type:   socket.MentionTypePerson,
+			Type:   typ,
 		})
 		from = i + len(tag)
 	}
@@ -1011,6 +1015,12 @@ func (c *Conn) Send(ctx context.Context, chatID, text string, mentions []connect
 	wireText := text
 	var mentioned []string
 	for _, m := range mentions {
+		if m.Everyone { // "@everyone" stays as text; each member is tagged
+			for _, uid := range m.Members {
+				mentioned = append(mentioned, waTypes.JID{User: uid, Server: waTypes.MessengerServer}.String())
+			}
+			continue
+		}
 		mj := waTypes.JID{User: m.UserID, Server: waTypes.MessengerServer}.String()
 		if strings.Contains(wireText, "@"+m.Name) {
 			wireText = strings.Replace(wireText, "@"+m.Name, "@"+mj, 1)

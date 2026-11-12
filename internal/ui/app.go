@@ -9,6 +9,7 @@ import (
 	"image"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -126,8 +127,11 @@ type Model struct {
 	atts      []pendingFile       // files in the draft, shown as [Image #n] tokens
 	replyTo   *store.MessageRow   // the message the draft replies to
 	escAt     time.Time           // first esc on a non-empty box: a second one soon clears it
-	dragFrom  int                 // mouse drag over messages (copy); -1 = none
+	dragFrom  int                 // mouse press on a message (click); -1 = none
 	dragTo    int
+	dragMedia bool    // the press was on a photo, card or file
+	sel       textSel // highlighted text (drag to copy)
+	lastClick clicks  // for double and triple clicks
 	suggIdx   int
 	suggOff   bool // esc closed suggestions for this draft position
 
@@ -488,6 +492,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.onLockedKey(msg)
 		}
 		m.lastInput = time.Now()
+		m.sel = textSel{} // typing or moving drops the highlight
 		return m.onKey(msg)
 
 	case tea.MouseMsg:
@@ -1098,6 +1103,9 @@ func (m Model) onComposeKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		mentions := keptMentions(val, m.mentions)
+		if m.chat.Group && hasEveryone(val) {
+			mentions = withEveryone(val, mentions, m.chat.ID, m.people)
+		}
 		m.compose.SetValue("")
 		delete(m.drafts, m.chat.ID)
 		delete(m.draftAtts, m.chat.ID)
@@ -1200,6 +1208,9 @@ func (m *Model) updateSuggestions() {
 		m.sugg = pathSuggestions(q)
 	} else {
 		lq := strings.ToLower(q)
+		if m.chat != nil && m.chat.Group && strings.HasPrefix(everyone, lq) {
+			m.sugg = append(m.sugg, suggestion{Label: "@" + everyone + "  tag the whole group", Everyone: true})
+		}
 		for i := range m.people {
 			p := m.people[i]
 			name := strings.ToLower(p.Name)
@@ -1231,6 +1242,9 @@ func (m *Model) acceptSuggestion(sg suggestion) tea.Cmd {
 		m.compose.SetCursor(at + len([]rune(with)))
 	}
 	switch {
+	case sg.Everyone:
+		replace("@" + everyone + " ")
+		m.sugg = nil
 	case sg.Person != nil:
 		replace("@" + sg.Person.Name + " ")
 		m.mentions = append(m.mentions, connector.Mention{UserID: sg.Person.ID, Name: sg.Person.Name})
@@ -1244,6 +1258,55 @@ func (m *Model) acceptSuggestion(sg suggestion) tea.Cmd {
 		return attachPaths([]string{sg.Path})
 	}
 	return nil
+}
+
+// everyone: "@everyone" tags the whole group chat, as on Messenger.
+const everyone = "everyone"
+
+// hasEveryone: "@everyone" as its own word (not "@everyones", not "a@everyone").
+func hasEveryone(text string) bool {
+	tag := "@" + everyone
+	for i := 0; ; {
+		j := strings.Index(text[i:], tag)
+		if j < 0 {
+			return false
+		}
+		j += i
+		end := j + len(tag)
+		before := j == 0 || text[j-1] == ' ' || text[j-1] == '\n'
+		after := end == len(text) || !isWordByte(text[end])
+		if before && after {
+			return true
+		}
+		i = end
+	}
+}
+
+func isWordByte(b byte) bool {
+	return b == '_' || b >= '0' && b <= '9' || b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= 0x80
+}
+
+// withEveryone adds the @everyone tag (typed or picked) and puts all tags
+// in text order, which is how they are matched when sending.
+func withEveryone(text string, ms []connector.Mention, chatID string, people []store.Person) []connector.Mention {
+	ids := make([]string, 0, len(people))
+	for _, p := range people {
+		ids = append(ids, p.ID)
+	}
+	out := []connector.Mention{{UserID: chatID, Name: everyone, Everyone: true, Members: ids}}
+	for _, mm := range ms {
+		if !mm.Everyone {
+			out = append(out, mm)
+		}
+	}
+	at := func(mm connector.Mention) int {
+		if mm.Everyone {
+			return strings.Index(text, "@"+everyone)
+		}
+		return strings.Index(text, "@"+mm.Name)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return at(out[i]) < at(out[j]) })
+	return out
 }
 
 func keptMentions(text string, ms []connector.Mention) []connector.Mention {
@@ -1870,6 +1933,11 @@ func (m Model) onMouse(e tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if m.mode != modeMain {
 		return m, nil
 	}
+	if next, cmd, done := m.onSelectMouse(e); done {
+		return next, cmd
+	} else {
+		m = next
+	}
 	lw := m.leftWidth()
 	inList := lw > 0 && e.X < lw
 	// drag over messages: highlight while dragging, copy on release
@@ -1889,7 +1957,14 @@ func (m Model) onMouse(e tea.MouseMsg) (tea.Model, tea.Cmd) {
 			if from != to { // dragged over several messages: copy them
 				return m, copyText(m.messagesText(from, to), to-from+1)
 			}
-			// a click: open its photo or link, save its file, or select the message
+			// a click on a photo, card or file opens or saves it; a click on
+			// text picks the message (so a double-click can take a word)
+			if !m.dragMedia {
+				m.focus, m.selecting = focusChat, true
+				m.compose.Blur()
+				m.selectIndex(from)
+				return m, nil
+			}
 			if md, ok := fileIn(m.msgs[from]); ok {
 				return m, m.saveFile(md)
 			}
@@ -1913,8 +1988,8 @@ func (m Model) onMouse(e tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if !inList && e.Button == tea.MouseButtonLeft && m.chat != nil {
-		if i := m.messageAt(e.Y); i >= 0 {
-			m.dragFrom, m.dragTo = i, i
+		if i, media := m.messageAtRow(e.Y); i >= 0 {
+			m.dragFrom, m.dragTo, m.dragMedia = i, i, media
 		}
 	}
 	switch e.Button {
@@ -2213,8 +2288,15 @@ func extFor(b []byte) string {
 
 // messageAt maps a screen row in the chat pane to a message index (-1 if none).
 func (m Model) messageAt(y int) int {
+	i, _ := m.messageAtRow(y)
+	return i
+}
+
+// messageAtRow: the message on screen row y, and whether y is on its
+// photo, card or file (not its text).
+func (m Model) messageAtRow(y int) (int, bool) {
 	if m.chat == nil {
-		return -1
+		return -1, false
 	}
 	lines, spans := m.chatLines()
 	ch := m.chatHeight()
@@ -2225,10 +2307,10 @@ func (m Model) messageAt(y int) int {
 	line := start + (y - 4 - pad)
 	for i, sp := range spans {
 		if line >= sp.start && line < sp.end {
-			return i
+			return i, line >= sp.media
 		}
 	}
-	return -1
+	return -1, false
 }
 
 // ---- sound picker ----

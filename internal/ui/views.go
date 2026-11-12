@@ -75,6 +75,7 @@ func (m Model) View() string {
 		lines = m.imageView()
 	default:
 		lines = m.mainView()
+		m.sel.highlight(lines)
 	}
 	// always exactly h lines, each exactly w wide, on the ink background
 	for len(lines) < m.h {
@@ -349,14 +350,27 @@ func (m Model) chatRow(c store.ChatRow, selected bool, lw int) []string {
 	if c.Muted {
 		name += " (muted)"
 	}
+	// a group chat carries a small mark right after its name; 1:1s stay plain
+	mark, markW := "", 0
+	if c.Group {
+		mark, markW = " "+groupMark, 1+ansi.StringWidth(groupMark)
+	}
+	styled := func(st lipgloss.Style) string {
+		if mark == "" {
+			return st.Render(fit(name, nameW))
+		}
+		n := ansi.Truncate(name, max(1, nameW-markW), "…")
+		pad := max(0, nameW-ansi.StringWidth(n)-markW)
+		return st.Render(n) + sGroupMark.Render(mark) + strings.Repeat(" ", pad)
+	}
 
 	edge, dot := " ", " "
 	if c.Unread {
 		dot = sAccent.Render(unreadDot)
 	}
-	nameS := sText.Render(fit(name, nameW))
+	nameS := styled(sText)
 	if c.Unread {
-		nameS = sBold.Render(fit(name, nameW))
+		nameS = styled(sBold)
 	}
 	snippet := c.Snippet
 	if !m.previewsOn { // shoulder-surfing: no message text in the list
@@ -367,7 +381,7 @@ func (m Model) chatRow(c store.ChatRow, selected bool, lw int) []string {
 	}
 	snip := sMuted.Render(fit(termSafe(snippet), lw-4))
 	if c.Muted {
-		nameS = sMuted.Render(fit(name, nameW))
+		nameS = styled(sMuted)
 	}
 	if selected {
 		edge = sAccent.Render("▎")
@@ -521,9 +535,9 @@ func (m Model) reactPicker() string {
 	}
 	var parts []string
 	for i, e := range reactions {
-		item := sMuted.Render(fmt.Sprint(i+1)) + " " + e
+		item := sMuted.Render(fmt.Sprint(i+1)) + " " + termSafe(e)
 		if e == mine {
-			item = sAccentB.Render(fmt.Sprint(i+1)) + " " + e
+			item = sAccentB.Render(fmt.Sprint(i+1)) + " " + termSafe(e)
 		}
 		parts = append(parts, item)
 	}
@@ -534,7 +548,7 @@ func (m Model) reactPicker() string {
 	return "   " + sTheirs.Render(" "+strings.Join(parts, "   ")+" ") + tail
 }
 
-type span struct{ start, end int }
+type span struct{ start, end, media int } // media: first photo/card/file line
 
 const (
 	sepGap  = 20 * time.Minute
@@ -611,6 +625,7 @@ func (m Model) chatLines() ([]string, []span) {
 				body = append(body, sText.Render(l))
 			}
 		}
+		mediaRow := len(body)
 		var others []connector.Media
 		for _, md := range msg.Media {
 			if md.Kind != connector.Photo {
@@ -635,7 +650,7 @@ func (m Model) chatLines() ([]string, []span) {
 				name = nameStyle(msg.SenderID).Render(fit(senderLabel(*msg), nameW))
 			}
 		}
-		chip := reactionChip(msg.Reactions)
+		chip := reactionChip(msg.Reactions, isSel)
 		start := len(out)
 		for j, l := range body {
 			left := strings.Repeat(" ", nameW)
@@ -647,9 +662,6 @@ func (m Model) chatLines() ([]string, []span) {
 				edge = sAccent.Render("▎")
 			}
 			var rightCol []string
-			if j == len(body)-1 && chip != "" {
-				rightCol = append(rightCol, chip)
-			}
 			switch {
 			case j == 0 && msg.Pending && time.Since(msg.Time) > notSentAfter:
 				rightCol = append(rightCol, sErr.Render("not sent"))
@@ -667,7 +679,18 @@ func (m Model) chatLines() ([]string, []span) {
 			}
 			out = append(out, line)
 		}
-		spans[i] = span{start, len(out)}
+		if chip != "" { // reactions: a small line under the message
+			edge := " "
+			if isSel {
+				edge = sAccent.Render("▎")
+			}
+			line := ansi.Truncate(edge+strings.Repeat(" ", nameW)+"  "+chip, rw-1, "…")
+			if isSel {
+				line = band(line, rw)
+			}
+			out = append(out, line)
+		}
+		spans[i] = span{start, len(out), start + mediaRow}
 		if albumStart == i { // the album's later messages share these lines
 			for j := i + 1; j < len(m.msgs) && sameAlbum(m.msgs[j-1], m.msgs[j]); j++ {
 				spans[j] = spans[i]
@@ -708,20 +731,46 @@ func dayLabel(t time.Time) string {
 	}
 }
 
-// reactionChip is "😆 2 ❤" for one message; yours is marked in amber.
-func reactionChip(rs []store.ReactionCount) string {
+// reactionChip is a soft pill under the message: " 😆 2  ❤ ". On the
+// picked message it says who reacted: " 😆 Ana, Ben  ❤ You ".
+func reactionChip(rs []store.ReactionCount, who bool) string {
+	if len(rs) == 0 {
+		return ""
+	}
 	var parts []string
 	for _, r := range rs {
 		p := termSafe(r.Emoji)
-		if r.Count > 1 {
-			p += " " + fmt.Sprint(r.Count)
-		}
-		if r.Mine {
-			p += sAccentB.Render("•")
+		switch {
+		case who:
+			p += " " + sText.Render(reactors(r))
+		case r.Count > 1:
+			p += " " + sMuted.Render(fmt.Sprint(r.Count))
 		}
 		parts = append(parts, p)
 	}
-	return strings.Join(parts, "  ")
+	in := " " + strings.Join(parts, "  ") + " "
+	return sPill.Render(strings.ReplaceAll(in, "\x1b[0m", "\x1b[0m"+bgSeq(cTheirs)))
+}
+
+// reactors: first names of who reacted; people we have no name for count
+// as "N others".
+func reactors(r store.ReactionCount) string {
+	var names []string
+	unknown := r.Count - len(r.Names)
+	for _, n := range r.Names {
+		if n == "" {
+			unknown++
+			continue
+		}
+		names = append(names, termSafe(firstName(n)))
+	}
+	switch {
+	case unknown == 1:
+		names = append(names, "1 other")
+	case unknown > 1:
+		names = append(names, fmt.Sprintf("%d others", unknown))
+	}
+	return strings.Join(names, ", ")
 }
 
 func senderLabel(msg store.MessageRow) string {
@@ -943,6 +992,10 @@ func (m Model) helpView() []string {
 		row("enter", "reply", "r 1-6", "react"),
 		row("o", "open", "y", "copy"),
 		row("enter", "send again", "d", "delete") + sDim.Render("   (not sent)"),
+		"",
+		head("mouse"),
+		row("drag", "copy text", "2×click", "copy word"),
+		row("3×click", "copy line", "click", "pick / open"),
 		"",
 		head("folders (f)"),
 		row("a", "add", "r", "rename"),
