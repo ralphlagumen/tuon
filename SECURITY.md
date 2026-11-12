@@ -62,7 +62,7 @@ Tuon builds on code from other people (mautrix-meta, whatsmeow and about 140 oth
 - **It shows what changed before building.** If an update changes dependencies, it lists them and needs you to type `yes`. A checksum change without a matching dependency change is refused. Modules are re-verified (`go mod verify`) before the build.
 - **Dependency updates are reviewed by hand.** [DEPENDENCIES.md](DEPENDENCIES.md) lists the modules that touch the network, your session or encryption, with the version last reviewed, and `./scripts/deps-review.sh` flags changes to them.
 - **Builds are reproducible.** The same tag built with the same Go version gives the same file, so anyone can compare against the published `SHA256SUMS`.
-- **Checks before every release:** `./scripts/check.sh` verifies checksums, builds, tests and scans for known vulnerabilities (govulncheck). Tuon requires Go 1.27.3, which fixes a certificate-checking flaw in 1.27.2.
+- **Checks before every release:** `./scripts/check.sh` verifies checksums, builds, tests and scans for known vulnerabilities (govulncheck). Tuon requires Go 1.27.4 (1.27.3 fixed a certificate-checking flaw in 1.27.2; 1.27.4 fixes an HTTP header race, GO-2026-6859).
 - **The repository** requires signed commits and linear history on `master`, with no force-push and no bypass.
 
 ## If your laptop is stolen, or you think your session leaked
