@@ -182,9 +182,17 @@ func relay(in, ctl int, winch chan os.Signal, resize func(), done chan error) {
 // so it goes on time whatever the app is doing (audit A13-11).
 func relayKeys(in, ctl int, stop chan struct{}) {
 	const holdFor = 25 * time.Millisecond
+	// escWaitMax: an Esc set aside during a scroll goes after this at most
+	const escWaitMax = 750 * time.Millisecond
 	buf := make([]byte, 32<<10)
 	var held []byte
 	var heldAt time.Time
+	// escAside: an Esc pressed while scroll reports kept coming. Sent with
+	// the next report it reads as alt+Esc and the report as typed text
+	// ("[<65;104;52M" in the box), so it waits until the keys go quiet and
+	// is then sent on its own.
+	var escAside bool
+	var asideAt time.Time
 	for {
 		select {
 		case <-stop:
@@ -197,14 +205,30 @@ func relayKeys(in, ctl int, stop chan struct{}) {
 			}
 			held = held[:0]
 		}
+		if escAside && time.Since(asideAt) >= escWaitMax {
+			if !writeKeys(ctl, []byte{0x1b}, stop) {
+				return
+			}
+			escAside = false
+		}
 		wait := 100
 		if len(held) > 0 {
 			wait = max(1, int((holdFor-time.Since(heldAt))/time.Millisecond)+1)
+		}
+		if escAside {
+			wait = min(wait, int(holdFor/time.Millisecond))
 		}
 		fds := []unix.PollFd{{Fd: int32(in), Events: unix.POLLIN}}
 		n, err := unix.Poll(fds, wait)
 		if err != nil && err != unix.EINTR {
 			return
+		}
+		if n == 0 && escAside && len(held) == 0 { // quiet: now the Esc is a key of its own
+			if !writeKeys(ctl, []byte{0x1b}, stop) {
+				return
+			}
+			escAside = false
+			continue
 		}
 		if n == 0 || fds[0].Revents&unix.POLLIN == 0 {
 			if n > 0 && fds[0].Revents&(unix.POLLHUP|unix.POLLERR) != 0 {
@@ -219,8 +243,18 @@ func relayKeys(in, ctl int, stop chan struct{}) {
 			}
 			continue
 		}
+		if len(held) == 1 && held[0] == 0x1b && buf[0] == 0x1b && !escAside {
+			// a lone Esc, then straight away another sequence: set it aside
+			held, escAside, asideAt = held[:0], true, time.Now()
+		}
 		data := append(held, buf[:m]...)
 		k := seq.CompleteLen(data)
+		if out, found := dropGluedEsc(data[:k]); found { // the same, inside one read
+			if !escAside {
+				escAside, asideAt = true, time.Now()
+			}
+			data, k = append(out, data[k:]...), len(out)
+		}
 		if !writeKeys(ctl, data[:k], stop) {
 			return
 		}
@@ -229,6 +263,29 @@ func relayKeys(in, ctl int, stop chan struct{}) {
 		}
 		held = append(held[:0:0], data[k:]...)
 	}
+}
+
+// dropGluedEsc takes out each lone Esc directly followed by another escape
+// sequence (ESC ESC [ or ESC ESC O): an Esc key pressed amid mouse reports.
+func dropGluedEsc(b []byte) ([]byte, bool) {
+	var out []byte
+	found := false
+	for i := 0; i < len(b); i++ {
+		if b[i] == 0x1b && i+2 < len(b) && b[i+1] == 0x1b && (b[i+2] == '[' || b[i+2] == 'O') {
+			if !found {
+				out = append(out, b[:i]...)
+				found = true
+			}
+			continue
+		}
+		if found {
+			out = append(out, b[i])
+		}
+	}
+	if !found {
+		return b, false
+	}
+	return out, true
 }
 
 // writeKeys writes to the app's (non-blocking) terminal, waiting while it
