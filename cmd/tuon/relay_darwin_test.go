@@ -66,3 +66,52 @@ func TestRelayFlushesLoneEscWhileBusy(t *testing.T) {
 		t.Fatal("a lone Esc never reached the app while it was drawing")
 	}
 }
+
+// Keys keep reaching the app while your terminal isn't taking output
+// (Terminal.app busy): they used to share one loop, which deadlocked with
+// Terminal.app during fast scrolling (2026-11-12).
+func TestRelayKeysFlowWhileOutputBlocked(t *testing.T) {
+	ctl, app, err := openPty()
+	if err != nil {
+		t.Skip("no pty:", err)
+	}
+	if _, err := term.MakeRaw(int(app.Fd())); err != nil {
+		t.Fatal(err)
+	}
+	inR, inW, _ := os.Pipe()
+	outR, outW, _ := os.Pipe() // "your terminal": nobody reads it, so it fills
+	_ = outR
+	oldStdout := os.Stdout
+	os.Stdout = outW
+	defer func() { os.Stdout = oldStdout }()
+
+	go relay(int(inR.Fd()), int(ctl.Fd()), make(chan os.Signal), func() {}, make(chan error, 1))
+	go func() { // the app draws far more than the terminal takes
+		frame := make([]byte, 4096)
+		for i := range frame {
+			frame[i] = 'x'
+		}
+		for {
+			if _, err := app.Write(frame); err != nil {
+				return
+			}
+		}
+	}()
+	time.Sleep(300 * time.Millisecond) // the output pipe is full by now
+
+	_, _ = inW.Write([]byte("k"))
+	got := make(chan string, 1)
+	go func() {
+		b := make([]byte, 8)
+		n, _ := app.Read(b)
+		got <- string(b[:n])
+	}()
+	select {
+	case s := <-got:
+		if s != "k" {
+			t.Fatalf("app got %q", s)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("a key never reached the app while the terminal wasn't taking output")
+	}
+}

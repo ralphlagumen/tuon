@@ -122,45 +122,39 @@ func runOnPty(cmd *exec.Cmd, started func()) (code int, ok bool, err error) {
 // relay copies your keys to the app's terminal and its output to yours,
 // with poll (no reader left behind once the app is gone, so the launcher
 // can read the keyboard again afterwards).
+//
+// The two directions run apart (keys on their own goroutine): in one loop,
+// a write to your terminal that waited (Terminal.app busy drawing) stopped
+// the keys being read, Terminal.app then waited to hand over more keys
+// (mouse reports while scrolling fast) and stopped taking output: all three
+// stuck for good (2026-11-12, sampled: launcher and app both in write).
 func relay(in, ctl int, winch chan os.Signal, resize func(), done chan error) {
 	out := int(os.Stdout.Fd())
+	_ = unix.SetNonblock(ctl, true) // the keys side must be able to give up
+	stop := make(chan struct{})
+	keysDone := make(chan struct{})
+	go func() { relayKeys(in, ctl, stop); close(keysDone) }()
+	defer func() { close(stop); <-keysDone }()
+
 	buf := make([]byte, 32<<10)
-	var held []byte // an unfinished escape sequence or character (seq.CompleteLen)
-	var heldAt time.Time
-	const holdFor = 25 * time.Millisecond // the rest of a sequence comes at once; a lone Esc is a key
 	exited := false
 	for {
-		// a held lone Esc goes on time even while the app keeps drawing
-		// (audit A13-11): otherwise it merges with the next key as alt+key
-		if len(held) > 0 && time.Since(heldAt) >= holdFor {
-			writeAll(ctl, held)
-			held = held[:0]
-		}
 		select {
 		case <-winch:
 			resize()
 		case err := <-done:
 			done <- err // for the caller
 			exited = true
+		case <-keysDone:
+			keysDone = nil // keyboard gone: keep showing output until the app exits
 		default:
 		}
 		fds := []unix.PollFd{{Fd: int32(ctl), Events: unix.POLLIN}}
-		if !exited {
-			fds = append(fds, unix.PollFd{Fd: int32(in), Events: unix.POLLIN})
-		}
-		wait := 100
-		if len(held) > 0 {
-			wait = max(1, int((holdFor-time.Since(heldAt))/time.Millisecond)+1)
-		}
-		n, err := unix.Poll(fds, wait)
+		n, err := unix.Poll(fds, 100)
 		if err != nil && err != unix.EINTR {
 			return
 		}
 		if n == 0 {
-			if len(held) > 0 {
-				writeAll(ctl, held)
-				held = held[:0]
-			}
 			if exited {
 				return // its output is all drained
 			}
@@ -171,7 +165,7 @@ func relay(in, ctl int, winch chan os.Signal, resize func(), done chan error) {
 			if m > 0 {
 				writeAll(out, buf[:m])
 			}
-			if err != nil || m == 0 {
+			if (err != nil && err != unix.EAGAIN) || m == 0 {
 				if exited {
 					return
 				}
@@ -179,20 +173,89 @@ func relay(in, ctl int, winch chan os.Signal, resize func(), done chan error) {
 				time.Sleep(20 * time.Millisecond)
 			}
 		}
-		if len(fds) > 1 && fds[1].Revents&unix.POLLIN != 0 {
-			if m, err := unix.Read(in, buf); m > 0 {
-				data := append(held, buf[:m]...)
-				k := seq.CompleteLen(data)
-				writeAll(ctl, data[:k])
-				if len(held) == 0 || k > 0 { // a new hold starts its own clock
-					heldAt = time.Now()
-				}
-				held = append(held[:0:0], data[k:]...)
-			} else if err != nil {
+	}
+}
+
+// relayKeys copies keys to the app until stop. A read never ends inside an
+// escape sequence or character (seq.CompleteLen); an unfinished tail waits
+// at most holdFor (a lone Esc is a real key), timed from when it was held,
+// so it goes on time whatever the app is doing (audit A13-11).
+func relayKeys(in, ctl int, stop chan struct{}) {
+	const holdFor = 25 * time.Millisecond
+	buf := make([]byte, 32<<10)
+	var held []byte
+	var heldAt time.Time
+	for {
+		select {
+		case <-stop:
+			return
+		default:
+		}
+		if len(held) > 0 && time.Since(heldAt) >= holdFor {
+			if !writeKeys(ctl, held, stop) {
 				return
 			}
+			held = held[:0]
+		}
+		wait := 100
+		if len(held) > 0 {
+			wait = max(1, int((holdFor-time.Since(heldAt))/time.Millisecond)+1)
+		}
+		fds := []unix.PollFd{{Fd: int32(in), Events: unix.POLLIN}}
+		n, err := unix.Poll(fds, wait)
+		if err != nil && err != unix.EINTR {
+			return
+		}
+		if n == 0 || fds[0].Revents&unix.POLLIN == 0 {
+			if n > 0 && fds[0].Revents&(unix.POLLHUP|unix.POLLERR) != 0 {
+				return
+			}
+			continue
+		}
+		m, err := unix.Read(in, buf)
+		if m <= 0 {
+			if err != nil && err != unix.EINTR && err != unix.EAGAIN {
+				return
+			}
+			continue
+		}
+		data := append(held, buf[:m]...)
+		k := seq.CompleteLen(data)
+		if !writeKeys(ctl, data[:k], stop) {
+			return
+		}
+		if len(held) == 0 || k > 0 { // a new hold starts its own clock
+			heldAt = time.Now()
+		}
+		held = append(held[:0:0], data[k:]...)
+	}
+}
+
+// writeKeys writes to the app's (non-blocking) terminal, waiting while it
+// is full, but never past stop. false: stopped or broken.
+func writeKeys(fd int, b []byte, stop chan struct{}) bool {
+	for len(b) > 0 {
+		n, err := unix.Write(fd, b)
+		if n > 0 {
+			b = b[n:]
+			continue
+		}
+		switch err {
+		case unix.EINTR:
+			continue
+		case unix.EAGAIN:
+			select {
+			case <-stop:
+				return false
+			default:
+			}
+			fds := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLOUT}}
+			_, _ = unix.Poll(fds, 100)
+		default:
+			return false
 		}
 	}
+	return true
 }
 
 func writeAll(fd int, b []byte) {

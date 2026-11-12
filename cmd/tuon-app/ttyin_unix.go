@@ -28,8 +28,14 @@ type ttyIn struct {
 }
 
 func (t *ttyIn) Read(p []byte) (n int, err error) {
-	n = copy(p, t.tail) // only ever the start of a sequence whose rest is waiting
+	n = copy(p, t.tail) // usually the start of a sequence whose rest is waiting
 	t.tail = t.tail[:0]
+	if n > 0 && !t.ready(25) {
+		// nothing followed: it was a real lone Esc at the end of a full read.
+		// Hand it over now; blocking here held it until the next key, so Esc
+		// pressed as a fast scroll stopped seemed to freeze tuon (audit A13-11)
+		return n, nil
+	}
 	m, err := t.File.Read(p[n:])
 	n += m
 	for err == nil && n > 0 && seq.CompleteLen(p[:n]) < n {
@@ -55,6 +61,13 @@ func (t *ttyIn) Read(p []byte) (n int, err error) {
 		escLast(p[:n])
 	}
 	return n, err
+}
+
+// ready: input is waiting (or comes within ms milliseconds).
+func (t *ttyIn) ready(ms int) bool {
+	fds := []unix.PollFd{{Fd: int32(t.Fd()), Events: unix.POLLIN}}
+	k, err := unix.Poll(fds, ms)
+	return err == nil && k > 0
 }
 
 // escLast moves a lone Esc that's directly followed by another escape
