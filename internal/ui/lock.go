@@ -105,7 +105,13 @@ func (m Model) onUnlocked(msg unlockedMsg) (tea.Model, tea.Cmd) {
 	}
 	m.locked, m.lockFails, m.lockErr = false, 0, ""
 	m.lastInput = time.Now()
-	return m, tea.Batch(tea.ClearScreen, m.reloadMessages())
+	cmd := m.reloadMessages()
+	if m.chat != nil && m.focus == focusChat { // you're back in the chat: now it's read
+		_ = m.st.MarkRead(m.chat.ID)
+		m.reloadChats()
+		cmd = tea.Batch(cmd, m.sendRead(true))
+	}
+	return m, tea.Batch(tea.ClearScreen, cmd)
 }
 
 func (m Model) lockView() []string {

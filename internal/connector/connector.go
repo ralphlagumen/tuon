@@ -141,6 +141,7 @@ type (
 	// ParticipantEvent says someone is in a group chat (for @ suggestions).
 	ParticipantEvent struct {
 		ChatID, UserID, Nickname string
+		Removed                  bool // they left or were removed
 	}
 	// ChatAliasEvent says chat From is the same conversation as chat To
 	// (Messenger lists encrypted 1:1s under a thread number, while their

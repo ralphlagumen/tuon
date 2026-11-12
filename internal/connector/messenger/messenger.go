@@ -349,6 +349,9 @@ func (c *Conn) handleTable(tbl *table.LSTable) {
 	for _, p := range tbl.LSAddParticipantIdToGroupThread {
 		c.emit(connector.ParticipantEvent{ChatID: id(p.ThreadKey), UserID: id(p.ContactId), Nickname: clean(p.Nickname)})
 	}
+	for _, p := range tbl.LSRemoveParticipantFromThread {
+		c.emit(connector.ParticipantEvent{ChatID: id(p.ThreadKey), UserID: id(p.ParticipantId), Removed: true})
+	}
 	for _, h := range tbl.LSVerifyHybridThreadExists {
 		if h.ThreadJID != 0 && h.ThreadJID != h.ThreadKey {
 			c.emit(connector.ChatAliasEvent{From: id(h.ThreadKey), To: id(h.ThreadJID)})
@@ -1019,8 +1022,8 @@ func (c *Conn) Send(ctx context.Context, chatID, text string, mentions []connect
 	wireText := text
 	var mentioned []string
 	for _, m := range mentions {
-		if m.Everyone { // "@everyone" stays as text; each member is tagged
-			for _, uid := range m.Members {
+		if m.Everyone { // "@everyone" stays as text; each current member is tagged
+			for _, uid := range c.groupMembers(ctx, wa, jid, m.Members) {
 				mentioned = append(mentioned, waTypes.JID{User: uid, Server: waTypes.MessengerServer}.String())
 			}
 			continue
@@ -1045,6 +1048,28 @@ func (c *Conn) Send(ctx context.Context, chatID, text string, mentions []connect
 	c.emit(connector.ChatEvent{Chat: connector.Chat{ID: chatID, Snippet: snippetOf(msg), LastActivity: msg.Time, Encrypted: true, Group: tt == table.ENCRYPTED_OVER_WA_GROUP}})
 	c.emit(connector.MessageEvent{Message: msg})
 	return nil
+}
+
+// groupMembers: who is in an encrypted group now, asked from the server, so
+// @everyone doesn't tag people who left (audit A13-6). Falls back to the
+// members tuon has stored if the server won't say. Never includes us.
+func (c *Conn) groupMembers(ctx context.Context, wa *whatsmeow.Client, jid waTypes.JID, stored []string) []string {
+	if jid.Server == waTypes.GroupServer {
+		info, err := wa.GetGroupInfo(ctx, jid)
+		if err == nil {
+			var out []string
+			for _, p := range info.Participants {
+				if p.JID.Server == waTypes.MessengerServer && p.JID.User != c.SelfID() {
+					out = append(out, p.JID.User)
+				}
+			}
+			if len(out) > 0 {
+				return out
+			}
+		}
+		c.log.Warn().Err(err).Int("stored", len(stored)).Msg("@everyone: group members not available from the server, using stored ones")
+	}
+	return stored
 }
 
 // replyMeta quotes the replied-to message in an encrypted send.

@@ -452,3 +452,23 @@ func TestRealNamesOverNicknames(t *testing.T) {
 		t.Errorf("reacted = %q, want Ted Ramos", got)
 	}
 }
+
+// Someone who leaves a group drops out of its members (for @everyone).
+func TestMembersDropLeavers(t *testing.T) {
+	st, err := OpenPath(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	for _, u := range []string{"1", "2", "3"} {
+		_ = st.AddParticipant(connector.ParticipantEvent{ChatID: "g", UserID: u})
+	}
+	_ = st.AddParticipant(connector.ParticipantEvent{ChatID: "g", UserID: "3", Removed: true})
+	if _, err := st.AddMessage(connector.Message{ID: "m", ChatID: "g", SenderID: "4", Text: "hi", Time: time.Now()}, true); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.Members("g", "1")
+	if err != nil || strings.Join(got, ",") != "2" {
+		t.Fatalf("members = %v, %v; want just 2 (not me, not the leaver, not a past sender)", got, err)
+	}
+}

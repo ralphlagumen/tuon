@@ -91,7 +91,7 @@ func (m Model) View() string {
 		if ansi.StringWidth(l) > m.w {
 			l = ansi.Truncate(l, m.w, "")
 		}
-		lines[i] = paint(l, m.w)
+		lines[i] = paint(emojiCursor(l), m.w) // last: nothing cuts the line after this
 	}
 	// Make every line differ from the last frame (an invisible reset that
 	// alternates), so Bubble Tea redraws all of them each time. If the
@@ -139,8 +139,8 @@ func (m Model) mainView() []string {
 	if m.statusErr {
 		status = sErr.Render(termSafe(m.status) + " ")
 	}
-	if m.warning != "" {
-		status = sErr.Render("⚠ "+termSafe(m.warning)) + "  " + status
+	if len(m.warnings) > 0 {
+		status = sErr.Render("⚠ "+termSafe(strings.Join(m.warnings, " · "))) + "  " + status
 	}
 	out := []string{
 		spread(" "+sAccentB.Render(brand)+"  "+sMuted.Render(m.platform), status, m.w),

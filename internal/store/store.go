@@ -698,10 +698,34 @@ ON CONFLICT(message_id, actor_id) DO UPDATE SET emoji = excluded.emoji`, e.Messa
 }
 
 func (s *Store) AddParticipant(e connector.ParticipantEvent) error {
+	if e.Removed { // they left: no longer suggested for @ or @everyone
+		_, err := s.DB.Exec(`DELETE FROM tuon_participants WHERE chat_id = ? AND user_id = ?`, e.ChatID, e.UserID)
+		return err
+	}
 	_, err := s.DB.Exec(`INSERT INTO tuon_participants (chat_id, user_id, nickname) VALUES (?, ?, ?)
 ON CONFLICT(chat_id, user_id) DO UPDATE SET nickname = CASE WHEN excluded.nickname <> '' THEN excluded.nickname ELSE nickname END`,
 		e.ChatID, e.UserID, e.Nickname)
 	return err
+}
+
+// Members lists a group's current members as Messenger last said (left
+// ones removed), without selfID. Unlike People, it doesn't count people who
+// only wrote there once.
+func (s *Store) Members(chatID, selfID string) ([]string, error) {
+	rows, err := s.DB.Query(`SELECT user_id FROM tuon_participants WHERE chat_id = ? AND user_id <> ? ORDER BY user_id`, chatID, selfID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
 }
 
 // People lists who can be @mentioned in a chat (everyone but selfID):

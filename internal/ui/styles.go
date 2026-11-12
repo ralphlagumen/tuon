@@ -170,11 +170,37 @@ func firstName(s string) string {
 // the cursor only 1.
 var appleTerminal = os.Getenv("TERM_PROGRAM") == "Apple_Terminal"
 
-// emojiStyle keeps "❤️" (narrow symbol + U+FE0F) a color emoji in
+// emojiCursor keeps "❤️" (narrow symbol + U+FE0F) a color emoji in
 // Terminal.app: clear its 2 cells (ECH, cursor stays), draw it, then step
 // over the second cell (CUF). Escapes have no width, so Tuon counts 2
 // cells and the terminal moves 2: nothing drifts.
+//
+// The codes go in last, on each finished screen line (View), never inside
+// text that is still laid out: truncating or cutting text keeps every
+// escape code past the cut, so a dropped emoji's cursor step would stay
+// and push the line out of place (audit A13-0).
 const emojiPre, emojiPost = "\x1b[2X", "\x1b[C"
+
+func emojiCursor(line string) string {
+	if !appleTerminal || !strings.ContainsRune(line, '\uFE0F') {
+		return line
+	}
+	rs := []rune(line)
+	var b strings.Builder
+	b.Grow(len(line) + 16)
+	for i := 0; i < len(rs); i++ {
+		r := rs[i]
+		if i+1 < len(rs) && rs[i+1] == '\uFE0F' && r > '~' && ansi.StringWidth(string(r)) == 1 {
+			b.WriteString(emojiPre)
+			b.WriteRune(r)
+			b.WriteString("\uFE0F" + emojiPost)
+			i++ // the marker
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
 
 // colorBare: symbols people mean as emoji even without U+FE0F (❤ is
 // Messenger's heart reaction). Terminal.app shows them as color emoji.
@@ -183,9 +209,11 @@ var colorBare = map[rune]bool{'❤': true, '❣': true, '☺': true, '☹': true
 // termSafe makes emoji take the width Tuon expects, so lines never wrap
 // and the screen never drifts.
 //   - "❄️" (narrow symbol + U+FE0F "emoji style") is drawn 2 cells wide but
-//     advances 1 in Terminal.app: there it is drawn as a color emoji with a
-//     cursor step after it (emojiStyle); elsewhere the marker becomes a
-//     real space (text-style symbol).
+//     advances 1 in Terminal.app: there it stays "❄️" (counted 2 cells) and
+//     View adds the cursor codes last (emojiCursor); elsewhere the marker
+//     becomes a real space (text-style symbol).
+//
+// It is safe to run twice: its output has no escape codes.
 //   - Joiners (U+200D), skin tones, keycap marks and U+FE0E are dropped, so
 //     each emoji stands alone: a family shows as its people, 👍🏽 as 👍.
 func termSafe(s string) string {
@@ -200,9 +228,8 @@ func termSafe(s string) string {
 			!marked && colorBare[r] // Messenger's heart reaction is a bare ❤
 		switch {
 		case narrowEmoji && appleTerminal:
-			b.WriteString(emojiPre)
 			b.WriteRune(r)
-			b.WriteString("\uFE0F" + emojiPost)
+			b.WriteRune('\uFE0F') // emojiCursor adds the cursor codes at the end
 			prev = '\uFE0F'
 			continue
 		case r == '\uFE0F':

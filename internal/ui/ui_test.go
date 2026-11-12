@@ -1671,6 +1671,52 @@ func TestSeenReceipts(t *testing.T) {
 	if len(fc.read) != 3 {
 		t.Fatalf(":seen off should send nothing, got %v", fc.read)
 	}
+
+	// turning it back on doesn't send what you read while it was off (A13-1)
+	m = key(m, "tab")
+	nm, _ = m.runCommand("seen on")
+	m = nm.(Model)
+	m = key(m, "enter")
+	next, cmd = m.Update(EventsMsg{connector.ContactEvent{ID: "300", Name: "Someone Else"}}) // any event
+	m = run(next.(Model), cmd)
+	if len(fc.read) != 3 {
+		t.Fatalf("messages read while :seen was off were sent later: %v", fc.read)
+	}
+
+	// locked: nothing is sent; unlocking sends it (A13-1)
+	m.SetLock(func() error { return nil }, nil, time.Minute)
+	m.lastInput = time.Now().Add(-2 * time.Minute)
+	next, _ = m.Update(idleTick{})
+	m = next.(Model)
+	if !m.locked {
+		t.Fatal("setup: not locked")
+	}
+	next, cmd = m.Update(EventsMsg{connector.MessageEvent{Message: connector.Message{ID: "m6", ChatID: "10", SenderID: "100", Text: "you there?", Time: now.Add(2 * time.Second)}}})
+	m = run(next.(Model), cmd)
+	if len(fc.read) != 3 {
+		t.Fatalf("receipt sent while locked: %v", fc.read)
+	}
+	if c, _ := m.st.Chat("10"); !c.Unread {
+		t.Fatal("a message that came while locked should stay unread until you're back")
+	}
+	next, cmd = m.Update(unlockedMsg{nil})
+	m = run(next.(Model), cmd)
+	if strings.Join(fc.read[3:], ",") != "10/m6" {
+		t.Fatalf("unlocking should send the receipt now, got %v", fc.read)
+	}
+
+	// a placeholder (still loading) is never sent as read (A13-3)
+	// (not run(): a placeholder starts backup refills on timers)
+	next, _ = m.Update(EventsMsg{connector.MessageEvent{Message: connector.Message{ID: "m7", ChatID: "10", SenderID: "100", Time: now.Add(3 * time.Second), Media: []connector.Media{{Kind: connector.Missing}}}}})
+	m = next.(Model)
+	if c := m.sendRead(true); c != nil {
+		c()
+	}
+	for _, r := range fc.read {
+		if r == "10/m7" {
+			t.Fatalf("placeholder sent as read: %v", fc.read)
+		}
+	}
 }
 
 // A group chat shows its mark right after the name; a 1:1 has none, and

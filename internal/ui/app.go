@@ -102,7 +102,7 @@ type Model struct {
 	refilling    map[string]bool // chats waiting to refill a message that couldn't be decrypted
 	askedName    map[string]bool // senders whose name we already asked Messenger for
 	checkAt      time.Time       // a redraw is due then, to flip "sending…" to "not sent"
-	warning      string          // a lasting safety warning shown in the header
+	warnings  []string // lasting warnings, all shown (a security note must not hide another)
 	keysWarn     string          // the decrypt warning, so it can be taken down when things recover
 	lock         lockConfig      // the lock screen, once main turns it on
 	locked       bool
@@ -249,9 +249,26 @@ func (m Model) LoggedOut() bool { return m.loggedOut }
 
 // Warn shows a lasting warning in the status line (e.g. disk not encrypted).
 func (m *Model) Warn(text string) {
-	if text != "" {
-		m.warning = text
+	if text == "" {
+		return
 	}
+	for _, w := range m.warnings {
+		if w == text {
+			return
+		}
+	}
+	m.warnings = append(m.warnings, text)
+}
+
+// unwarn takes one warning down.
+func (m *Model) unwarn(text string) {
+	out := m.warnings[:0]
+	for _, w := range m.warnings {
+		if w != text {
+			out = append(out, w)
+		}
+	}
+	m.warnings = out
 }
 
 // Cleanup frees photos held by the terminal. Call after the program ends.
@@ -521,7 +538,9 @@ func (m *Model) flash(text string) tea.Cmd {
 
 func (m *Model) applyEvents(evts []any) tea.Cmd {
 	openID := "" // a chat you're in (not just previewing) stays read
-	if m.chat != nil && m.focus == focusChat {
+	// while locked you aren't reading: nothing is marked read here or sent
+	// to Meta as "Seen" (audit A13-1); unlocking does that for the open chat
+	if m.chat != nil && m.focus == focusChat && !m.locked {
 		openID = m.chat.ID
 	}
 	chime := false
@@ -574,7 +593,8 @@ func (m *Model) applyEvents(evts []any) tea.Cmd {
 		case connector.KeyChangeEvent:
 			chats, _ := m.st.EncryptedChatsWith(e.UserID)
 			for _, id := range chats {
-				_, _ = m.st.AddMessage(connector.KeyChangeNotice(id, e.UserID, e.Time), id == openID)
+				// local time: the server's could be backdated to hide it up in the history (A13-10)
+				_, _ = m.st.AddMessage(connector.KeyChangeNotice(id, e.UserID, time.Now()), id == openID)
 			}
 			if len(chats) > 0 {
 				who := e.UserID
@@ -585,9 +605,7 @@ func (m *Model) applyEvents(evts []any) tea.Cmd {
 			}
 		case connector.KeysTroubleEvent:
 			if e.Failed == 0 { // decrypting again: take our warning down
-				if m.keysWarn != "" && m.warning == m.keysWarn {
-					m.warning = ""
-				}
+				m.unwarn(m.keysWarn)
 				m.keysWarn = ""
 				continue
 			}
@@ -1117,7 +1135,8 @@ func (m Model) onComposeKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		mentions := keptMentions(val, m.mentions)
 		if m.chat.Group && hasEveryone(val) {
-			mentions = withEveryone(val, mentions, m.chat.ID, m.people)
+			members, _ := m.st.Members(m.chat.ID, m.conn.SelfID())
+			mentions = withEveryone(val, mentions, m.chat.ID, members)
 		}
 		m.compose.SetValue("")
 		delete(m.drafts, m.chat.ID)
@@ -1301,12 +1320,8 @@ func isWordByte(b byte) bool {
 
 // withEveryone adds the @everyone tag (typed or picked) and puts all tags
 // in text order, which is how they are matched when sending.
-func withEveryone(text string, ms []connector.Mention, chatID string, people []store.Person) []connector.Mention {
-	ids := make([]string, 0, len(people))
-	for _, p := range people {
-		ids = append(ids, p.ID)
-	}
-	out := []connector.Mention{{UserID: chatID, Name: everyone, Everyone: true, Members: ids}}
+func withEveryone(text string, ms []connector.Mention, chatID string, members []string) []connector.Mention {
+	out := []connector.Mention{{UserID: chatID, Name: everyone, Everyone: true, Members: members}}
 	for _, mm := range ms {
 		if !mm.Everyone {
 			out = append(out, mm)
@@ -1696,7 +1711,7 @@ func (m Model) finishFolderName(name string) (tea.Model, tea.Cmd) {
 // chat opens this run, only an unread chat sends anything (a read one is
 // already read everywhere). Needs m.msgs loaded.
 func (m *Model) sendRead(wasUnread bool) tea.Cmd {
-	if m.chat == nil || !m.seenOn {
+	if m.chat == nil || m.locked {
 		return nil
 	}
 	if m.readUpTo == nil {
@@ -1707,7 +1722,9 @@ func (m *Model) sendRead(wasUnread bool) tea.Cmd {
 	var msgs []connector.Message
 	newest := upTo
 	for _, r := range m.msgs {
-		if r.FromMe || r.Pending || r.SenderID == m.conn.SelfID() || !r.Time.After(upTo) {
+		// not yours, and really shown: a placeholder (still loading, or
+		// tuon's own notice) was never read (audit A13-3)
+		if r.FromMe || r.Pending || r.SenderID == m.conn.SelfID() || !r.Time.After(upTo) || isPlaceholder(r) {
 			continue
 		}
 		msgs = append(msgs, r.Message)
@@ -1715,8 +1732,8 @@ func (m *Model) sendRead(wasUnread bool) tea.Cmd {
 			newest = r.Time
 		}
 	}
-	m.readUpTo[id] = newest
-	if len(msgs) == 0 || (!seenBefore && !wasUnread) {
+	m.readUpTo[id] = newest // also with :seen off, so turning it on later doesn't send what you read meanwhile
+	if !m.seenOn || len(msgs) == 0 || (!seenBefore && !wasUnread) {
 		return nil
 	}
 	if len(msgs) > 50 {

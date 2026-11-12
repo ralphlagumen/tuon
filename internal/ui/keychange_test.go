@@ -44,8 +44,8 @@ func TestKeyChangeNotice(t *testing.T) {
 	if count("10") != 0 {
 		t.Fatal("no notice in a plain (not encrypted) chat")
 	}
-	if !strings.Contains(m.warning, "Jen's security key changed") {
-		t.Fatalf("header warning = %q", m.warning)
+	if !strings.Contains(strings.Join(m.warnings, "|"), "Jen's security key changed") {
+		t.Fatalf("header warnings = %q", m.warnings)
 	}
 
 	// open the 1:1: the notice shows; picking it allows no react or reply
@@ -72,5 +72,21 @@ func TestKeyChangeNotice(t *testing.T) {
 	m = key(m, "enter")
 	if m.replyTo != nil {
 		t.Fatal("replying to tuon's own notice")
+	}
+}
+
+// Several lasting warnings all show (A13-9); taking one down keeps the rest.
+func TestWarningsStack(t *testing.T) {
+	m, _, _ := newTestModel(t, 160, 30)
+	m.Warn("ignored HTTPS_PROXY: tuon connects to Meta directly")
+	m.Warn("Jen's security key changed: see the chat")
+	m.Warn("Jen's security key changed: see the chat") // same again: once
+	s := screen(m)
+	if !strings.Contains(s, "HTTPS_PROXY") || !strings.Contains(s, "security key changed") || strings.Count(s, "security key changed") != 1 {
+		t.Fatalf("warnings:\n%s", s)
+	}
+	m.unwarn("ignored HTTPS_PROXY: tuon connects to Meta directly")
+	if s := screen(m); strings.Contains(s, "HTTPS_PROXY") || !strings.Contains(s, "security key changed") {
+		t.Fatalf("after unwarn:\n%s", s)
 	}
 }

@@ -126,8 +126,16 @@ func relay(in, ctl int, winch chan os.Signal, resize func(), done chan error) {
 	out := int(os.Stdout.Fd())
 	buf := make([]byte, 32<<10)
 	var held []byte // an unfinished escape sequence or character (seq.CompleteLen)
+	var heldAt time.Time
+	const holdFor = 25 * time.Millisecond // the rest of a sequence comes at once; a lone Esc is a key
 	exited := false
 	for {
+		// a held lone Esc goes on time even while the app keeps drawing
+		// (audit A13-11): otherwise it merges with the next key as alt+key
+		if len(held) > 0 && time.Since(heldAt) >= holdFor {
+			writeAll(ctl, held)
+			held = held[:0]
+		}
 		select {
 		case <-winch:
 			resize()
@@ -142,7 +150,7 @@ func relay(in, ctl int, winch chan os.Signal, resize func(), done chan error) {
 		}
 		wait := 100
 		if len(held) > 0 {
-			wait = 25 // the rest of a sequence comes at once; a lone Esc is a key
+			wait = max(1, int((holdFor-time.Since(heldAt))/time.Millisecond)+1)
 		}
 		n, err := unix.Poll(fds, wait)
 		if err != nil && err != unix.EINTR {
@@ -176,6 +184,9 @@ func relay(in, ctl int, winch chan os.Signal, resize func(), done chan error) {
 				data := append(held, buf[:m]...)
 				k := seq.CompleteLen(data)
 				writeAll(ctl, data[:k])
+				if len(held) == 0 || k > 0 { // a new hold starts its own clock
+					heldAt = time.Now()
+				}
 				held = append(held[:0:0], data[k:]...)
 			} else if err != nil {
 				return
