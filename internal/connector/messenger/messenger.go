@@ -607,6 +607,10 @@ func (c *Conn) onWA(raw any) {
 	case *events.UndecryptableMessage:
 		c.onUndecryptable(raw.(*events.UndecryptableMessage))
 		return
+	case *events.IdentityChange:
+		e := raw.(*events.IdentityChange)
+		c.emit(connector.KeyChangeEvent{UserID: e.JID.User, Time: e.Timestamp, Implicit: e.Implicit})
+		return
 	}
 	evt, ok := raw.(*events.FBMessage)
 	if !ok {
@@ -1067,7 +1071,13 @@ func wrapContent(content *waConsumerApplication.ConsumerApplication_Content) *wa
 // (up to the newest message read), and per-message receipts for encrypted
 // ones (by sender in groups), like Messenger's apps and Beeper's bridge.
 func (c *Conn) MarkRead(ctx context.Context, chatID string, msgs []connector.Message) error {
-	if len(msgs) == 0 {
+	real := msgs[:0:0] // tuon's own notices never go to Messenger
+	for _, m := range msgs {
+		if !connector.IsLocalNotice(m) {
+			real = append(real, m)
+		}
+	}
+	if msgs = real; len(msgs) == 0 {
 		return nil
 	}
 	key, err := strconv.ParseInt(chatID, 10, 64)

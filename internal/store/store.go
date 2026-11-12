@@ -403,6 +403,9 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET text = exclu
 		if IsMissing(m.Media) {
 			snippet = connector.MissingSnippet
 		}
+		if m.Media[0].Kind == connector.KeyChanged {
+			snippet = "Security key changed"
+		}
 		if md := m.Media[0]; md.Kind == connector.Link && md.Title != "" {
 			snippet = "Shared: " + md.Title
 		}
@@ -430,6 +433,26 @@ ON CONFLICT(id) DO UPDATE SET
 	last_ts = MAX(last_ts, excluded.last_ts)`,
 		m.ChatID, s.enc(strings.Join(strings.Fields(snippet), " ")), m.Time.UnixMilli(), b2i(unread))
 	return !exists, err
+}
+
+// EncryptedChatsWith lists the encrypted chats userID is in: the 1:1 with
+// them and the groups they're a member of.
+func (s *Store) EncryptedChatsWith(userID string) ([]string, error) {
+	rows, err := s.DB.Query(`SELECT id FROM tuon_chats WHERE encrypted = 1 AND (id = ?1
+	OR (grp = 1 AND id IN (SELECT chat_id FROM tuon_participants WHERE user_id = ?1)))`, s.Resolve(userID))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
 }
 
 // IsMissing: the message is a placeholder for one that couldn't be decrypted.

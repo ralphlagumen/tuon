@@ -351,17 +351,21 @@ func (m Model) chatRow(c store.ChatRow, selected bool, lw int) []string {
 		name += " (muted)"
 	}
 	// a group chat carries a small mark right after its name; 1:1s stay plain
-	mark, markW := "", 0
+	mark := ""
 	if c.Group {
-		mark, markW = " "+groupMark, 1+ansi.StringWidth(groupMark)
+		mark += " " + sGroupMark.Render(groupMark)
 	}
+	if c.Encrypted { // end-to-end encrypted: Meta can't read it
+		mark += " " + lockMark
+	}
+	markW := ansi.StringWidth(mark)
 	styled := func(st lipgloss.Style) string {
 		if mark == "" {
 			return st.Render(fit(name, nameW))
 		}
 		n := ansi.Truncate(name, max(1, nameW-markW), "…")
 		pad := max(0, nameW-ansi.StringWidth(n)-markW)
-		return st.Render(n) + sGroupMark.Render(mark) + strings.Repeat(" ", pad)
+		return st.Render(n) + mark + strings.Repeat(" ", pad)
 	}
 
 	edge, dot := " ", " "
@@ -412,6 +416,9 @@ func (m Model) chatTitle(rw int) string {
 		kind += ", encrypted"
 	}
 	left := " " + sBold.Render(termSafe(c.Display))
+	if c.Encrypted {
+		left += " " + lockMark
+	}
 	if m.narrow() {
 		left = " " + sAccent.Render("‹") + left
 	}
@@ -1098,6 +1105,8 @@ func mediaLabel(k connector.MediaKind) string {
 		return "New message, loading from your backup…"
 	case connector.Unavailable:
 		return "Couldn't load this message. See it on your phone (d removes this line)."
+	case connector.KeyChanged:
+		return "⚠ Security key changed: a new phone or reinstall, or someone listening in. If unsure, check with them another way."
 	default:
 		return "File"
 	}

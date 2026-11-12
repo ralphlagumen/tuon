@@ -33,7 +33,8 @@ func main() {
 	debug.SetGCPercent(50)
 	debug.SetMemoryLimit(96 << 20)
 	args := os.Args[1:]
-	privateFiles() // everything tuon writes is readable only by you
+	privateFiles()                           // everything tuon writes is readable only by you
+	proxyNote = proxyWarning(dropProxyEnv()) // before any connection: Go reads these once
 	sandboxNote = os.Getenv(sandbox.NoteEnv)
 	if runtime.GOOS == "darwin" && !sandbox.Active() && sandboxNote == "" {
 		sandboxNote = "started without the launcher: run tuon, not tuon-app"
@@ -130,6 +131,8 @@ func openLog() (zerolog.Logger, error) {
 	return logger, logErr
 }
 
+var proxyNote string // a proxy setting tuon ignored, for the header
+
 var (
 	logOnce sync.Once
 	logger  zerolog.Logger
@@ -190,6 +193,7 @@ func run() error {
 
 	model := ui.New(ctx, st, conn, "messenger")
 	model.Warn(diskWarning())
+	model.Warn(proxyNote)
 	if sandboxNote != "" {
 		model.Warn(sandboxNote)
 	}

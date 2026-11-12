@@ -63,6 +63,10 @@ const groupMark = "⁂"
 
 var sGroupMark = lipgloss.NewStyle().Foreground(lipgloss.Color("#C9D1DC"))
 
+// lockMark follows an end-to-end encrypted chat's name (list and header).
+// U+1F512 is a 2-cell emoji with no U+FE0F, so Terminal.app keeps its width.
+const lockMark = "🔒"
+
 // Each person in a group gets a steady name color, so you can tell who is
 // talking at a glance. All read well on the ink background.
 var nameColors = []string{"#7FB4E3", "#8FCB8F", "#D6A2E8", "#E3A27F", "#7FD1C7", "#E3C97F", "#A9A6F2", "#E38FA8"}

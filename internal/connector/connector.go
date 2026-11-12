@@ -4,6 +4,7 @@ package connector
 
 import (
 	"context"
+	"fmt"
 	"time"
 )
 
@@ -31,7 +32,26 @@ const (
 	Missing MediaKind = "missing"
 	// Unavailable: a Missing message the backup never had; see it on the phone.
 	Unavailable MediaKind = "unavailable"
+	// KeyChanged: tuon's own notice that someone's security key changed.
+	// It never came from Messenger, so it is never reacted to, replied to or
+	// sent as read (see IsLocalNotice).
+	KeyChanged MediaKind = "keychanged"
 )
+
+// IsLocalNotice: a line tuon added itself, not a Messenger message.
+func IsLocalNotice(m Message) bool {
+	return len(m.Media) == 1 && m.Media[0].Kind == KeyChanged
+}
+
+// KeyChangeNotice is the notice for UserID's key change, one per person per
+// minute (several devices often change together).
+func KeyChangeNotice(chatID, userID string, at time.Time) Message {
+	return Message{
+		ID:     fmt.Sprintf("tuon-keychanged:%s:%s:%d", chatID, userID, at.Unix()/60),
+		ChatID: chatID, SenderID: userID, Time: at,
+		Media: []Media{{Kind: KeyChanged}},
+	}
+}
 
 // MissingSnippet is the chat-list line for a message still being fetched.
 const MissingSnippet = "New message, loading…"
@@ -109,6 +129,14 @@ type (
 	// ReactionEvent sets (or with Emoji == "" removes) one person's reaction.
 	ReactionEvent struct {
 		ChatID, MessageID, ActorID, Emoji string
+	}
+	// KeyChangeEvent says UserID's end-to-end encryption key changed: a new
+	// phone or reinstall, or someone intercepting. Implicit: found by a
+	// message that failed the old key, not announced by the server.
+	KeyChangeEvent struct {
+		UserID   string
+		Time     time.Time
+		Implicit bool
 	}
 	// ParticipantEvent says someone is in a group chat (for @ suggestions).
 	ParticipantEvent struct {

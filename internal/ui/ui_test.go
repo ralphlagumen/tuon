@@ -1679,20 +1679,30 @@ func TestGroupMark(t *testing.T) {
 	m, _, _ := newTestModel(t, 100, 30)
 	const lw = 30
 	for _, tc := range []struct {
-		name  string
-		group bool
-	}{{"Barkada", true}, {"A very long group chat name indeed", true}, {"Raine Cruz", false}} {
-		c := store.ChatRow{Chat: connector.Chat{ID: "1", Group: tc.group}, Display: tc.name}
+		name       string
+		group, enc bool
+		want       string // right after the name
+	}{
+		{"Barkada", true, false, "Barkada " + groupMark},
+		{"A very long group chat name indeed", true, true, ""},
+		{"Raine Cruz", false, false, ""},
+		{"Raine Cruz", false, true, "Raine Cruz " + lockMark},
+		{"Barkada", true, true, "Barkada " + groupMark + " " + lockMark},
+	} {
+		c := store.ChatRow{Chat: connector.Chat{ID: "1", Group: tc.group, Encrypted: tc.enc}, Display: tc.name}
 		lines := m.chatRow(c, false, lw)
 		plain := ansi.Strip(lines[0])
 		if got := strings.Contains(plain, groupMark); got != tc.group {
-			t.Errorf("%q: mark shown = %v, want %v: %q", tc.name, got, tc.group, plain)
+			t.Errorf("%q: group mark shown = %v, want %v: %q", tc.name, got, tc.group, plain)
+		}
+		if got := strings.Contains(plain, lockMark); got != tc.enc {
+			t.Errorf("%q: lock shown = %v, want %v: %q", tc.name, got, tc.enc, plain)
 		}
 		if w := ansi.StringWidth(lines[0]); w != lw {
 			t.Errorf("%q: row width %d, want %d: %q", tc.name, w, lw, plain)
 		}
-		if tc.group && tc.name == "Barkada" && !strings.Contains(plain, "Barkada "+groupMark) {
-			t.Errorf("mark not right after the name: %q", plain)
+		if tc.want != "" && !strings.Contains(plain, tc.want) {
+			t.Errorf("marks not right after the name: %q, want %q", plain, tc.want)
 		}
 	}
 }
@@ -1722,6 +1732,21 @@ func TestHelpSpacing(t *testing.T) {
 	for _, want := range []string{`pick / open {2,}click`, `edit folder {2,}f`, `chats \(empty\) {2,}esc`} {
 		if !regexp.MustCompile(want).MatchString(s) {
 			t.Fatalf("help missing %q:\n%s", want, s)
+		}
+	}
+}
+
+// The chat header shows the lock only for an encrypted chat.
+func TestHeaderLock(t *testing.T) {
+	m, _, _ := newTestModel(t, 100, 30)
+	for _, enc := range []bool{true, false} {
+		m.chat = &store.ChatRow{Chat: connector.Chat{ID: "1", Encrypted: enc}, Display: "Raine Cruz"}
+		title := ansi.Strip(m.chatTitle(m.rightWidth()))
+		if got := strings.Contains(title, "Raine Cruz "+lockMark); got != enc {
+			t.Errorf("encrypted=%v: header %q", enc, title)
+		}
+		if w := ansi.StringWidth(m.chatTitle(m.rightWidth())); w != m.rightWidth() {
+			t.Errorf("encrypted=%v: header width %d, want %d", enc, w, m.rightWidth())
 		}
 	}
 }

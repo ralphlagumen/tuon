@@ -571,6 +571,18 @@ func (m *Model) applyEvents(evts []any) tea.Cmd {
 		case connector.ParticipantEvent:
 			e.ChatID = m.st.Resolve(e.ChatID)
 			_ = m.st.AddParticipant(e)
+		case connector.KeyChangeEvent:
+			chats, _ := m.st.EncryptedChatsWith(e.UserID)
+			for _, id := range chats {
+				_, _ = m.st.AddMessage(connector.KeyChangeNotice(id, e.UserID, e.Time), id == openID)
+			}
+			if len(chats) > 0 {
+				who := e.UserID
+				if c, err := m.st.Chat(m.st.Resolve(e.UserID)); err == nil && c.Display != "" {
+					who = c.Display
+				}
+				m.Warn(firstName(termSafe(who)) + "'s security key changed: see the chat")
+			}
 		case connector.KeysTroubleEvent:
 			if e.Failed == 0 { // decrypting again: take our warning down
 				if m.keysWarn != "" && m.warning == m.keysWarn {
@@ -696,7 +708,8 @@ func (m *Model) relink(ref string, err error) tea.Cmd {
 
 // isPlaceholder: a "loading" / "couldn't load" line, not a real message.
 func isPlaceholder(msg store.MessageRow) bool {
-	return len(msg.Media) == 1 && (msg.Media[0].Kind == connector.Missing || msg.Media[0].Kind == connector.Unavailable)
+	return len(msg.Media) == 1 && (msg.Media[0].Kind == connector.Missing || msg.Media[0].Kind == connector.Unavailable ||
+		msg.Media[0].Kind == connector.KeyChanged)
 }
 
 // notSent: a message of yours Messenger never confirmed.
@@ -1842,7 +1855,7 @@ func (m Model) onSelectKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if sel >= 0 && sel < len(m.msgs) && m.notSent(m.msgs[sel]) {
 			return m.retry(m.msgs[sel])
 		}
-		if sel >= 0 && sel < len(m.msgs) && !m.msgs[sel].Pending {
+		if sel >= 0 && sel < len(m.msgs) && !m.msgs[sel].Pending && !connector.IsLocalNotice(m.msgs[sel].Message) {
 			r := m.msgs[sel]
 			m.replyTo = &r
 		}
@@ -1873,6 +1886,9 @@ func (m Model) onSelectKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		if sel >= 0 && sel < len(m.msgs) && m.msgs[sel].Pending {
 			return m, m.flash("Wait until it's sent to react")
+		}
+		if sel >= 0 && sel < len(m.msgs) && isPlaceholder(m.msgs[sel]) {
+			return m, nil // tuon's own line: nothing to react to
 		}
 		if sel >= 0 && sel < len(m.msgs) {
 			m.reacting = true
