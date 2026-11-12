@@ -123,6 +123,9 @@ func openLog() (zerolog.Logger, error) {
 		zerolog.SetGlobalLevel(level)
 		logger = zerolog.New(f).With().Timestamp().Logger()
 		zlog.Logger = logger // messagix also logs through the global logger
+		if level != zerolog.DebugLevel {
+			zlog.Logger = logger.Hook(&onceHook{}) // its decoder repeats one warning per chat row
+		}
 	})
 	return logger, logErr
 }
