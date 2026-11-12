@@ -13,6 +13,7 @@ import (
 	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 
+	"github.com/ralph/tuon/internal/paths"
 	"github.com/ralph/tuon/internal/sandbox"
 	"github.com/ralph/tuon/internal/seq"
 )
@@ -133,7 +134,8 @@ func relay(in, ctl int, winch chan os.Signal, resize func(), done chan error) {
 	_ = unix.SetNonblock(ctl, true) // the keys side must be able to give up
 	stop := make(chan struct{})
 	keysDone := make(chan struct{})
-	go func() { relayKeys(in, ctl, stop); close(keysDone) }()
+	trace := seq.OpenTrace(paths.Dir(), "launcher") // TUON_KEYTRACE=1
+	go func() { relayKeys(in, ctl, stop, trace); close(keysDone) }()
 	defer func() { close(stop); <-keysDone }()
 
 	buf := make([]byte, 32<<10)
@@ -180,7 +182,7 @@ func relay(in, ctl int, winch chan os.Signal, resize func(), done chan error) {
 // escape sequence or character (seq.CompleteLen); an unfinished tail waits
 // at most holdFor (a lone Esc is a real key), timed from when it was held,
 // so it goes on time whatever the app is doing (audit A13-11).
-func relayKeys(in, ctl int, stop chan struct{}) {
+func relayKeys(in, ctl int, stop chan struct{}, trace *seq.Trace) {
 	const holdFor = 25 * time.Millisecond
 	// escWaitMax: an Esc set aside during a scroll goes after this at most
 	const escWaitMax = 750 * time.Millisecond
@@ -200,13 +202,13 @@ func relayKeys(in, ctl int, stop chan struct{}) {
 		default:
 		}
 		if len(held) > 0 && time.Since(heldAt) >= holdFor {
-			if !writeKeys(ctl, held, stop) {
+			if !writeKeysT(trace, ctl, held, stop) {
 				return
 			}
 			held = held[:0]
 		}
 		if escAside && time.Since(asideAt) >= escWaitMax {
-			if !writeKeys(ctl, []byte{0x1b}, stop) {
+			if !writeKeysT(trace, ctl, []byte{0x1b}, stop) {
 				return
 			}
 			escAside = false
@@ -224,7 +226,7 @@ func relayKeys(in, ctl int, stop chan struct{}) {
 			return
 		}
 		if n == 0 && escAside && len(held) == 0 { // quiet: now the Esc is a key of its own
-			if !writeKeys(ctl, []byte{0x1b}, stop) {
+			if !writeKeysT(trace, ctl, []byte{0x1b}, stop) {
 				return
 			}
 			escAside = false
@@ -237,6 +239,9 @@ func relayKeys(in, ctl int, stop chan struct{}) {
 			continue
 		}
 		m, err := unix.Read(in, buf)
+		if m > 0 {
+			trace.Bytes("in", buf[:m])
+		}
 		if m <= 0 {
 			if err != nil && err != unix.EINTR && err != unix.EAGAIN {
 				return
@@ -255,7 +260,7 @@ func relayKeys(in, ctl int, stop chan struct{}) {
 			}
 			data, k = append(out, data[k:]...), len(out)
 		}
-		if !writeKeys(ctl, data[:k], stop) {
+		if !writeKeysT(trace, ctl, data[:k], stop) {
 			return
 		}
 		if len(held) == 0 || k > 0 { // a new hold starts its own clock
@@ -286,6 +291,12 @@ func dropGluedEsc(b []byte) ([]byte, bool) {
 		return b, false
 	}
 	return out, true
+}
+
+// writeKeysT: writeKeys, recorded in the key trace.
+func writeKeysT(trace *seq.Trace, fd int, b []byte, stop chan struct{}) bool {
+	trace.Bytes("to-app", b)
+	return writeKeys(fd, b, stop)
 }
 
 // writeKeys writes to the app's (non-blocking) terminal, waiting while it

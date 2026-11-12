@@ -63,3 +63,41 @@ func seqComplete(s []byte) bool {
 	}
 	return true // alt+key, or ESC \ ending an earlier OSC
 }
+
+// Masked shows terminal input for a key trace without what was typed:
+// escape sequences stay as they are (ESC as \e), any other printable
+// character becomes x, other bytes show as \xNN.
+func Masked(b []byte) string {
+	out := make([]byte, 0, len(b)*2)
+	for i := 0; i < len(b); i++ {
+		c := b[i]
+		if c == 0x1b {
+			j := i + 1
+			if j < len(b) && (b[j] == '[' || b[j] == 'O') {
+				j++
+				for j < len(b) && !(b[j] >= 0x40 && b[j] <= 0x7E && (b[i+1] == 'O' || j > i+2 || b[j] != '[')) {
+					j++
+				}
+				if j < len(b) {
+					j++ // the final byte
+				}
+			}
+			out = append(out, `\e`...)
+			out = append(out, b[i+1:j]...)
+			i = j - 1
+			continue
+		}
+		switch {
+		case c >= 0x20 && c < 0x7f:
+			out = append(out, 'x')
+		default:
+			out = append(out, []byte(`\x`+hex2(c))...)
+		}
+	}
+	return string(out)
+}
+
+func hex2(c byte) string {
+	const h = "0123456789abcdef"
+	return string([]byte{h[c>>4], h[c&15]})
+}

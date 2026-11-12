@@ -104,3 +104,21 @@ func TestTtyInTailWaitsForSlowRest(t *testing.T) {
 		t.Fatalf("second read = %q, want the whole report", got)
 	}
 }
+
+func TestEscLastMovesEveryGluedEsc(t *testing.T) {
+	r := "\x1b[<65;127;46M"
+	for in, want := range map[string]string{
+		"\x1b" + r + r:                       r + r + "\x1b",
+		r + "\x1b" + r + "\x1b" + r:          r + r + r + "\x1b\x1b",
+		"\x1b" + r + "\x1bOA":                r + "\x1bOA\x1b",
+		r + r:                                r + r,
+		"\x1b\x1b":                           "\x1b\x1b", // alt+esc stays
+		"ab\x1b" + r + strings.Repeat(r, 15): "ab" + r + strings.Repeat(r, 15) + "\x1b",
+	} {
+		b := []byte(in)
+		escLast(b)
+		if string(b) != want {
+			t.Errorf("escLast(%q) = %q, want %q", in, b, want)
+		}
+	}
+}

@@ -9,6 +9,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/ralph/tuon/internal/seq"
+	"github.com/ralph/tuon/internal/store"
 )
 
 // ttyIn is the terminal input Bubble Tea reads. Bubble Tea (v1.3) reads
@@ -24,13 +25,15 @@ import (
 // It stays a file (Fd) so Bubble Tea still puts the terminal in raw mode.
 type ttyIn struct {
 	*os.File
-	tail []byte
+	tail  []byte
+	trace *seq.Trace // TUON_KEYTRACE=1
 }
 
 func (t *ttyIn) Read(p []byte) (n int, err error) {
 	n = copy(p, t.tail) // usually the start of a sequence whose rest is waiting
 	t.tail = t.tail[:0]
 	if n > 0 && !t.ready(tailWait) {
+		t.trace.Bytes("lone", p[:n])
 		// nothing followed: it was a real lone Esc at the end of a full read.
 		// Hand it over now; blocking here held it until the next key, so Esc
 		// pressed as a fast scroll stopped seemed to freeze tuon (audit A13-11)
@@ -57,9 +60,10 @@ func (t *ttyIn) Read(p []byte) (n int, err error) {
 			break
 		}
 	}
-	if err == nil && n < len(p) {
-		escLast(p[:n])
+	if err == nil {
+		escLast(p[:n]) // full reads too: a fast scroll fills every read
 	}
+	t.trace.Bytes("read", p[:n])
 	return n, err
 }
 
@@ -82,15 +86,22 @@ func (t *ttyIn) ready(ms int) bool {
 // arrives glued to the next mouse report ("\x1b\x1b[<65;…M"), which Bubble
 // Tea reads as alt+esc plus typed text; "\x1b[<65;…M\x1b" reads as the
 // scroll, then Esc. Only on short reads, where the end is a real boundary.
+//
+// Every such Esc moves (Esc pressed several times during a scroll), in
+// order, and on full reads too: the read is already cut at a sequence
+// boundary, so its end is a safe place for a key.
 func escLast(b []byte) {
-	for i := 0; i+2 < len(b); i++ {
+	end := len(b) // the moved Escs collect after end
+	for i := 0; i+2 < end; {
 		if b[i] == 0x1b && b[i+1] == 0x1b && (b[i+2] == '[' || b[i+2] == 'O') {
-			copy(b[i:], b[i+1:])
-			b[len(b)-1] = 0x1b
-			return
+			copy(b[i:end], b[i+1:end])
+			b[end-1] = 0x1b
+			end--
+			continue
 		}
+		i++
 	}
 }
 
 // appInput is what Bubble Tea reads keys and mouse events from.
-func appInput() io.Reader { return &ttyIn{File: os.Stdin} }
+func appInput() io.Reader { return &ttyIn{File: os.Stdin, trace: seq.OpenTrace(store.Dir(), "app")} }
