@@ -415,3 +415,40 @@ func TestSensitiveColumnsEncrypted(t *testing.T) {
 		t.Fatalf("second EncryptAll re-sealed %d items", n)
 	}
 }
+
+// Group nicknames never replace real names: tagging and "who reacted" use
+// the contact name; a nickname only stands in when there is no name.
+func TestRealNamesOverNicknames(t *testing.T) {
+	st, err := OpenPath(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	_ = st.UpsertChat(connector.Chat{ID: "g", Name: "Barkada", Group: true})
+	_ = st.UpsertContact("2", "Ted Ramos")
+	_ = st.AddParticipant(connector.ParticipantEvent{ChatID: "g", UserID: "2", Nickname: "Teddy Bear"})
+	_ = st.AddParticipant(connector.ParticipantEvent{ChatID: "g", UserID: "3", Nickname: "Mystery"}) // no contact name
+	if _, err := st.AddMessage(connector.Message{ID: "m", ChatID: "g", SenderID: "1", Text: "hi", Time: time.Now()}, true); err != nil {
+		t.Fatal(err)
+	}
+	_ = st.SetReaction(connector.ReactionEvent{ChatID: "g", MessageID: "m", ActorID: "2", Emoji: "😆"})
+
+	ppl, err := st.People("g", "1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, p := range ppl {
+		names = append(names, p.Name)
+	}
+	if got := strings.Join(names, ","); got != "Mystery,Ted Ramos" {
+		t.Errorf("people = %q, want real name (nickname only without one)", got)
+	}
+	msgs, err := st.Messages("g", 10, "1")
+	if err != nil || len(msgs) != 1 || len(msgs[0].Reactions) != 1 {
+		t.Fatalf("messages = %+v, %v", msgs, err)
+	}
+	if got := msgs[0].Reactions[0].Names; len(got) != 1 || got[0] != "Ted Ramos" {
+		t.Errorf("reacted = %q, want Ted Ramos", got)
+	}
+}

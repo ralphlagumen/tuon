@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -1703,6 +1704,24 @@ func TestHasEveryone(t *testing.T) {
 	} {
 		if got := hasEveryone(text); got != want {
 			t.Errorf("hasEveryone(%q) = %v, want %v", text, got, want)
+		}
+	}
+}
+
+// Help rows: every description keeps a gap before its key ("pick / open"
+// once ran into "click").
+func TestHelpSpacing(t *testing.T) {
+	m, _, _ := newTestModel(t, 100, 60)
+	m.mode = modeHelp
+	s := screen(m)
+	for _, bad := range []string{"openclick", "folderf", "…"} {
+		if strings.Contains(s, bad) {
+			t.Fatalf("help runs %q together:\n%s", bad, s)
+		}
+	}
+	for _, want := range []string{`pick / open {2,}click`, `edit folder {2,}f`, `chats \(empty\) {2,}esc`} {
+		if !regexp.MustCompile(want).MatchString(s) {
+			t.Fatalf("help missing %q:\n%s", want, s)
 		}
 	}
 }

@@ -966,8 +966,9 @@ func (m Model) overlaySound(lines []string) []string {
 }
 
 func (m Model) helpView() []string {
+	const descW = 15 // the longest description ("chats (empty)") plus a gap
 	row := func(k1, d1, k2, d2 string) string {
-		return " " + fit(sDim.Render(d1), 11) + fit(sAccent.Render(k1), 13) + fit(sDim.Render(d2), 11) + sAccent.Render(k2)
+		return " " + fit(sDim.Render(d1), descW) + fit(sAccent.Render(k1), 13) + fit(sDim.Render(d2), descW) + sAccent.Render(k2)
 	}
 	cmd := func(c, d string) string { return "  " + fit(sAccent.Render(c), 24) + sDim.Render(d) }
 	head := func(t string) string { return " " + sDim.Render(t) }
@@ -986,7 +987,7 @@ func (m Model) helpView() []string {
 		row("@", "tag", "@~/", "attach"),
 		row("ctrl+v", "paste", "ctrl+o", "photo"),
 		row("↑", "pick msg", "esc esc", "clear"),
-		row("tab", "chats", "esc", "chats (empty box)"),
+		row("tab", "chats", "esc", "chats (empty)"),
 		"",
 		head("picked message"),
 		row("enter", "reply", "r 1-6", "react"),

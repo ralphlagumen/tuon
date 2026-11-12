@@ -685,15 +685,15 @@ ON CONFLICT(chat_id, user_id) DO UPDATE SET nickname = CASE WHEN excluded.nickna
 // group members, anyone who has written there, or the other person in a 1:1.
 func (s *Store) People(chatID, selfID string) ([]Person, error) {
 	rows, err := s.DB.Query(`
-SELECT u.id, COALESCE(NULLIF(p.nickname, ''), ct.name, '') AS name FROM (
+SELECT u.id, COALESCE(NULLIF(ct.name, ''), NULLIF(p.nickname, ''), '') AS shown FROM ( -- real name; a nickname only if we have none
 	SELECT user_id AS id FROM tuon_participants WHERE chat_id = ?1
 	UNION SELECT DISTINCT sender_id FROM tuon_messages WHERE chat_id = ?1
 	UNION SELECT id FROM tuon_chats WHERE id = ?1 AND grp = 0
 ) u
 LEFT JOIN tuon_participants p ON p.chat_id = ?1 AND p.user_id = u.id
 LEFT JOIN tuon_contacts ct ON ct.id = u.id
-WHERE u.id <> ?2 AND name <> ''
-ORDER BY name`, chatID, selfID)
+WHERE u.id <> ?2 AND shown <> ''
+ORDER BY shown`, chatID, selfID)
 	if err != nil {
 		return nil, err
 	}
@@ -750,7 +750,7 @@ func (s *Store) attachReactions(chatID, selfID string, msgs []MessageRow) error 
 		idx[m.ID] = i
 	}
 	rows, err := s.DB.Query(`SELECT r.message_id, r.emoji, COUNT(*), MAX(r.actor_id = ?1), MIN(r.rowid),
-	GROUP_CONCAT(CASE WHEN r.actor_id = ?1 THEN 'You' ELSE COALESCE(NULLIF(p.nickname, ''), ct.name, '') END, char(31))
+	GROUP_CONCAT(CASE WHEN r.actor_id = ?1 THEN 'You' ELSE COALESCE(NULLIF(ct.name, ''), NULLIF(p.nickname, ''), '') END, char(31))
 FROM tuon_reactions r
 LEFT JOIN tuon_participants p ON p.chat_id = r.chat_id AND p.user_id = r.actor_id
 LEFT JOIN tuon_contacts ct ON ct.id = r.actor_id
