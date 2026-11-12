@@ -3,6 +3,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -44,8 +45,13 @@ func TestTTYInFullReadKeepsTail(t *testing.T) {
 	defer r.Close()
 	defer w.Close()
 	in := &ttyIn{File: r}
-	wheel := "\x1b[<65;103;58M" // 15 bytes: 256 isn't a multiple
-	burst := strings.Repeat(wheel, 60)
+	// reports that differ (the mouse moves), so none are squashed as repeats;
+	// 15-16 bytes each: 256 isn't a multiple
+	var b strings.Builder
+	for i := 0; i < 60; i++ {
+		fmt.Fprintf(&b, "\x1b[<65;%d;58M", 100+i)
+	}
+	burst := b.String()
 	_, _ = w.Write([]byte(burst))
 	var got strings.Builder
 	buf := make([]byte, 256)

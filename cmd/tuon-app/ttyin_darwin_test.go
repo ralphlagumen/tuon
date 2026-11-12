@@ -122,3 +122,23 @@ func TestEscLastMovesEveryGluedEsc(t *testing.T) {
 		}
 	}
 }
+
+func TestSquashWheel(t *testing.T) {
+	up, dn := "\x1b[<65;99;46M", "\x1b[<64;99;46M"
+	click := "\x1b[<0;10;5M"
+	for in, want := range map[string]string{
+		strings.Repeat(up, 19): up + up,
+		up:                     up,
+		up + dn + up:           up + dn + up,
+		strings.Repeat(up, 5) + "a" + strings.Repeat(up, 5): up + up + "a" + up + up,
+		strings.Repeat(up, 4) + click + click + click:       up + up + click + click + click, // only the wheel
+		strings.Repeat(up, 3) + "\x1b":                      up + up + "\x1b",
+		"\x1b[<65;99;4":                                     "\x1b[<65;99;4", // unfinished: untouched
+	} {
+		b := []byte(in)
+		n := squashWheel(b)
+		if got := string(b[:n]); got != want {
+			t.Errorf("squashWheel(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

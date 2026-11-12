@@ -48,6 +48,9 @@ func (t *ttyIn) Read(p []byte) (n int, err error) {
 				break // one huge sequence: hand it over as it is
 			}
 			t.tail = append(t.tail, p[k:n]...)
+			escLast(p[:k])
+			k = squashWheel(p[:k])
+			t.trace.Bytes("read", p[:k])
 			return k, nil
 		}
 		fds := []unix.PollFd{{Fd: int32(t.Fd()), Events: unix.POLLIN}}
@@ -62,6 +65,7 @@ func (t *ttyIn) Read(p []byte) (n int, err error) {
 	}
 	if err == nil {
 		escLast(p[:n]) // full reads too: a fast scroll fills every read
+		n = squashWheel(p[:n])
 	}
 	t.trace.Bytes("read", p[:n])
 	return n, err
@@ -73,6 +77,50 @@ func (t *ttyIn) Read(p []byte) (n int, err error) {
 // of a mouse report into the box ("[<65;133;59M", 2026-11-12). A real lone
 // Esc only lands here at the very end of a full read, and is then 0.2 s late.
 const tailWait = 200
+
+// squashWheel keeps at most two identical mouse-wheel reports in a row and
+// returns the new length. A fast trackpad scroll sends far more reports
+// than tuon can draw (one per line moved, all the same: "\x1b[<65;99;46M"),
+// so it fell seconds behind (key trace, 2026-11-12). Reads only hold long
+// runs when tuon is behind; then the excess is skipped, not queued.
+func squashWheel(b []byte) int {
+	out := 0
+	var last []byte // the previous report kept, if it was a wheel report
+	run := 0
+	for i := 0; i < len(b); {
+		end := i + 1
+		wheel := false
+		if b[i] == 0x1b && i+3 < len(b) && b[i+1] == '[' && b[i+2] == '<' && b[i+3] == '6' {
+			j := i + 3
+			for j < len(b) && b[j] != 'M' && b[j] != 'm' && b[j] != 0x1b {
+				j++
+			}
+			if j < len(b) && b[j] == 'M' && j+1-i >= 9 && (b[i+4] == '4' || b[i+4] == '5') && b[i+5] == ';' {
+				end, wheel = j+1, true
+			}
+		}
+		cur := b[i:end]
+		switch {
+		case wheel && last != nil && string(cur) == string(last):
+			run++
+		case wheel:
+			run = 1
+		default:
+			run = 0
+		}
+		if !wheel || run <= 2 {
+			copy(b[out:], cur)
+			if wheel {
+				last = b[out : out+len(cur)]
+			} else {
+				last = nil
+			}
+			out += len(cur)
+		}
+		i = end
+	}
+	return out
+}
 
 // ready: input is waiting (or comes within ms milliseconds).
 func (t *ttyIn) ready(ms int) bool {
