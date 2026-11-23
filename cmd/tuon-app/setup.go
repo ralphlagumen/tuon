@@ -329,7 +329,7 @@ func privateFiles() {
 }
 
 // cleanTemp deletes photos written for the system viewer.
-func cleanTemp() { _ = os.RemoveAll(filepath.Join(os.TempDir(), "tuon")) }
+func cleanTemp() { _ = safefile.ShredAll(filepath.Join(os.TempDir(), "tuon")) } // zeroed first: photos, files
 
 // removeRetired deletes what older versions kept and nothing uses now: the
 // plain PNG photo cache (photos now go to the terminal without touching the

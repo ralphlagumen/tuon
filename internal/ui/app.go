@@ -19,6 +19,7 @@ import (
 	"github.com/ralph/tuon/internal/connector"
 	"github.com/ralph/tuon/internal/connector/messenger"
 	"github.com/ralph/tuon/internal/opener"
+	"github.com/ralph/tuon/internal/safefile"
 	"github.com/ralph/tuon/internal/store"
 )
 
@@ -2620,12 +2621,12 @@ func (m *Model) saveFile(md connector.Media) tea.Cmd {
 				err = cerr
 			}
 			if err != nil {
-				os.Remove(f.Name())
+				_ = safefile.Shred(f.Name())
 				return toastMsg{"couldn't save the file: " + err.Error()}
 			}
 			rep, err := c.Do(opener.OpSave, f.Name(), safeFileName(md.Name))
 			if err != nil {
-				os.Remove(f.Name())
+				_ = safefile.Shred(f.Name())
 				return toastMsg{"couldn't save the file: " + err.Error()}
 			}
 			return toastMsg{"Saved to " + shortHome(rep.Text)}

@@ -45,7 +45,9 @@ and versions follow [Semantic Versioning](https://semver.org/).
 - tuon-app ignores `HTTP(S)_PROXY` / `ALL_PROXY` (the header says when one was ignored); `tuon update` runs git, go
   and swiftc without proxy settings.
 - Logout `--wipe`, account switch and relink overwrite the session, `vault.json`, old photo cache and login profile
-  with zeros before deleting them. Encrypting an old plain `tuon.db` zeroes the plain file too.
+  with zeros before deleting them. Encrypting an old plain `tuon.db` zeroes the plain file too. So do the
+  session files from before the vault (`login.json`, `cookies.txt`), the photos and files tuon hands to other apps
+  (its temp folder, at start and quit) and a save that failed halfway.
 - Arc dropped from the login browsers.
 - Go 1.27.4 (GO-2026-6859, net/http header race).
 - The sandboxed app gets only the environment it needs: no SSH agent socket, tokens or other tools' variables. It

@@ -169,3 +169,28 @@ func TestDeleteIgnoresKeychainErrors(t *testing.T) {
 		t.Fatal("login.enc kept")
 	}
 }
+
+// TestOldSessionFilesZeroed: the plaintext session files from before the
+// vault are overwritten before they're deleted (M5.2): a hard link to
+// them reads zeros afterwards.
+func TestOldSessionFilesZeroed(t *testing.T) {
+	dir := t.TempDir()
+	for _, p := range []string{filePath(dir), legacyPath(dir)} {
+		if err := os.WriteFile(p, []byte("c_user=1; xs=secret"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Link(p, p+".link"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	removeOld(dir)
+	for _, p := range []string{filePath(dir), legacyPath(dir)} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Fatalf("%s still there", p)
+		}
+		b, _ := os.ReadFile(p + ".link")
+		if strings.Contains(string(b), "secret") {
+			t.Fatalf("%s wasn't zeroed: %q", p, b)
+		}
+	}
+}

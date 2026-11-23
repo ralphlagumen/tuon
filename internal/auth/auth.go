@@ -53,7 +53,7 @@ func Load(dir string) (Creds, error) {
 		var c Creds
 		if json.Unmarshal(b, &c) == nil && c.Valid() {
 			if Save(dir, c) == nil && where == "keychain" { // move it into the keychain
-				_ = os.Remove(filePath(dir))
+				_ = safefile.Shred(filePath(dir))
 			}
 			return c, nil
 		}
@@ -62,7 +62,7 @@ func Load(dir string) (Creds, error) {
 		c := Creds{Platform: "messenger", Cookies: ParseCookieLine(string(b))}
 		if c.Valid() {
 			if Save(dir, c) == nil {
-				_ = os.Remove(legacyPath(dir))
+				_ = safefile.Shred(legacyPath(dir))
 			}
 			return c, nil
 		}
@@ -85,7 +85,7 @@ func Save(dir string, c Creds) error {
 	}
 	if err := keyringSet(service, account, string(b)); err == nil {
 		where = "keychain"
-		_ = os.Remove(filePath(dir))
+		_ = safefile.Shred(filePath(dir))
 		return nil
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -161,8 +161,8 @@ func SaveSealed(dir string, v Sealer, c Creds) error {
 // delete that failed once is tried again.
 func removeOld(dir string) {
 	_ = keyringDelete(service, account)
-	_ = os.Remove(filePath(dir))
-	_ = os.Remove(legacyPath(dir))
+	_ = safefile.Shred(filePath(dir))
+	_ = safefile.Shred(legacyPath(dir))
 }
 
 // LoadSealed reads the encrypted session. With migrate, a session still in
