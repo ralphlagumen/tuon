@@ -10,6 +10,10 @@ and versions follow [Semantic Versioning](https://semver.org/).
   and takes no input but `q` until all three are done, so you don't read or answer a half-synced list. If it fails
   or takes over 45 seconds, `enter` opens your saved chats anyway. Later reconnects don't block; the header shows
   them.
+- `:keys` (`:k`) in an encrypted 1:1 shows the person's device keys and yours, in the same form Messenger's app
+  shows under "Verify end-to-end encryption". Compare them on your phone and press `v` to mark them verified: the
+  header then says "verified", and if their keys change later (checked when you open the chat and when Messenger
+  reports a key change) tuon warns until you compare again.
 - Drag over a message or the draft to select and copy text; double-click takes a word, triple-click a line.
 - Group chats show ⁂ after their name; encrypted chats show 🔒 in the list and header.
 - `:hush` hides a chat from every view (muted, out of Unread and folders); `:hushed` (`:H`) lists them, `:unhush`

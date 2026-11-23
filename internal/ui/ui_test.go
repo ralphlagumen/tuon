@@ -44,6 +44,7 @@ type fakeConn struct {
 	sent        []sent
 	reacted     []reacted
 	read        []string
+	keySet      connector.KeySet // what ContactKeys returns
 }
 
 func (f *fakeConn) Start(context.Context) error { return nil }

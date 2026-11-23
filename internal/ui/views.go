@@ -167,6 +167,9 @@ func (m Model) mainView() []string {
 	if m.soundPick {
 		out = m.overlaySound(out)
 	}
+	if m.keys != nil {
+		out = m.overlayKeys(out)
+	}
 	return out
 }
 
@@ -418,6 +421,9 @@ func (m Model) chatTitle(rw int) string {
 	}
 	if c.Encrypted {
 		kind += ", encrypted"
+		if _, _, ok := m.st.Verified(c.ID); ok && !c.Group {
+			kind += ", verified"
+		}
 	}
 	left := " " + sBold.Render(termSafe(c.Display))
 	if c.Encrypted {
@@ -1059,6 +1065,7 @@ func (m Model) helpView() []string {
 		cmd(":m  :mute", "mute or unmute the chat"),
 		cmd(":hush  :unhush", "hide a chat from every view (:hushed to find it)"),
 		cmd(":H  :hushed", "show hushed chats"),
+		cmd(":k  :keys", "compare an encrypted chat's keys with your phone, mark verified"),
 		cmd(":delete", "delete a chat and its messages (asks to confirm)"),
 		cmd(":s  :sound", "new-message sound and volume"),
 		cmd(":l  :lock", "lock tuon now"),

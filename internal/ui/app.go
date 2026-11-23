@@ -101,13 +101,16 @@ type Model struct {
 	selID        string // selected message; "" = follow the newest
 	scroll       int    // lines scrolled up from the bottom
 	loadingOlder bool
-	synced       map[string]bool // encrypted chats already filled from the PIN backup this run
-	refilling    map[string]bool // chats waiting to refill a message that couldn't be decrypted
-	askedName    map[string]bool // senders whose name we already asked Messenger for
-	checkAt      time.Time       // a redraw is due then, to flip "sending…" to "not sent"
-	warnings     []string        // lasting warnings, all shown (a security note must not hide another)
-	keysWarn     string          // the decrypt warning, so it can be taken down when things recover
-	lock         lockConfig      // the lock screen, once main turns it on
+	synced       map[string]bool   // encrypted chats already filled from the PIN backup this run
+	refilling    map[string]bool   // chats waiting to refill a message that couldn't be decrypted
+	askedName    map[string]bool   // senders whose name we already asked Messenger for
+	checkAt      time.Time         // a redraw is due then, to flip "sending…" to "not sent"
+	warnings     []string          // lasting warnings, all shown (a security note must not hide another)
+	keysWarn     string            // the decrypt warning, so it can be taken down when things recover
+	keys         *keysPanel        // the :keys panel, when open
+	keysChecked  map[string]bool   // verified people whose keys were checked this run
+	keyWarns     map[string]string // chat → its "keys changed since you verified" warning
+	lock         lockConfig        // the lock screen, once main turns it on
 	locked       bool
 	unlocking    bool
 	lockErr      string
@@ -473,6 +476,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return peopleMsg{seq: seq, people: found}
 		}
 
+	case keysMsg:
+		m.onKeys(msg)
+		return m, nil
+
 	case peopleMsg:
 		if msg.seq != m.searchSeq {
 			return m, nil // an older search
@@ -634,6 +641,10 @@ func (m *Model) applyEvents(evts []any) tea.Cmd {
 					who = c.Display
 				}
 				m.Warn(firstName(termSafe(who)) + "'s security key changed: see the chat")
+			}
+			if id := m.st.Resolve(e.UserID); id != "" { // verified: compare again now
+				delete(m.keysChecked, id)
+				refills = append(refills, m.checkVerified(id))
 			}
 		case connector.KeysTroubleEvent:
 			if e.Failed == 0 { // decrypting again: take our warning down
@@ -971,6 +982,9 @@ func (m Model) onKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.folders {
 		return m.onFolderKey(k)
+	}
+	if m.keys != nil {
+		return m.onKeysKey(k)
 	}
 	if m.soundPick {
 		return m.onSoundKey(k)
@@ -1388,7 +1402,7 @@ func keptMentions(text string, ms []connector.Mention) []connector.Mention {
 // the sound off).
 var shortCommands = map[string]string{
 	"l": "lock", "s": "sound", "m": "mute", "i": "images", "p": "previews", "h": "help", "r": "seen",
-	"H": "hushed",
+	"H": "hushed", "k": "keys",
 }
 
 // expandCommand turns a shortcut into its command, keeping "on"/"off".
@@ -1524,6 +1538,8 @@ func (m Model) runCommand(cmd string) (tea.Model, tea.Cmd) {
 			return m, m.flash("Previews on")
 		}
 		return m, m.flash("Previews off: no message text until you open a chat")
+	case "keys":
+		return m.openKeys()
 	case "help":
 		m.mode = modeHelp
 	case "lock":
@@ -1860,6 +1876,9 @@ func (m *Model) openChat(c store.ChatRow) tea.Cmd {
 	cmd := tea.Batch(m.reloadMessages(), m.sendRead(c.Unread))
 	m.reloadChats()
 	newest := m.loadNewest()
+	if c.Encrypted && !c.Group {
+		cmd = tea.Batch(cmd, m.checkVerified(c.ID))
+	}
 	if len(m.msgs) < 20 && newest == nil {
 		return tea.Batch(focus, cmd, m.loadOlder())
 	}

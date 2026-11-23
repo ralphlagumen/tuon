@@ -5,6 +5,9 @@ package connector
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -218,4 +221,62 @@ type Connector interface {
 	MarkRead(ctx context.Context, chatID string, msgs []Message) error
 	FetchMedia(ctx context.Context, m Media) ([]byte, error)
 	Close()
+}
+
+// DeviceKey is one device's end-to-end identity key, the hex Messenger's
+// app shows under "Verify end-to-end encryption" (checked side by side,
+// MESSENGER-MITM M4.0). Key == nil: the device is listed but tuon hasn't
+// exchanged a message with it yet, so it has no key for it.
+type DeviceKey struct {
+	Device uint16
+	Key    []byte
+	This   bool // tuon's own device
+}
+
+// KeySet is a 1:1 chat's keys: the other person's devices and ours.
+type KeySet struct {
+	Theirs, Mine []DeviceKey
+}
+
+// KeyLister is a connector that can show people's encryption keys.
+type KeyLister interface {
+	ContactKeys(ctx context.Context, chatID string) (KeySet, error)
+}
+
+// KeyPrint is a canonical record of keys ("device=hex" sorted by device,
+// devices without a key left out), kept when you mark someone verified.
+func KeyPrint(keys []DeviceKey) string {
+	var parts []string
+	for _, k := range keys {
+		if k.Key != nil {
+			parts = append(parts, fmt.Sprintf("%d=%x", k.Device, k.Key))
+		}
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, ",")
+}
+
+// KeyChanges says how keys differ from a KeyPrint: devices whose key
+// changed and devices that are new. Devices that went away aren't a risk
+// and aren't listed.
+func KeyChanges(print string, keys []DeviceKey) (changed, added []uint16) {
+	was := map[string]string{}
+	for _, p := range strings.Split(print, ",") {
+		if d, k, ok := strings.Cut(p, "="); ok {
+			was[d] = k
+		}
+	}
+	for _, k := range keys {
+		if k.Key == nil {
+			continue
+		}
+		old, ok := was[strconv.Itoa(int(k.Device))]
+		switch {
+		case !ok:
+			added = append(added, k.Device)
+		case old != fmt.Sprintf("%x", k.Key):
+			changed = append(changed, k.Device)
+		}
+	}
+	return changed, added
 }
