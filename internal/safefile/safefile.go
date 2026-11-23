@@ -45,7 +45,7 @@ func Append(path string, perm os.FileMode) (*os.File, error) {
 			return nil, err
 		}
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, perm)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND|noFollow, perm)
 	if err != nil {
 		return nil, err
 	}

@@ -270,7 +270,16 @@ func wait(cmd *exec.Cmd) (int, error) {
 func unlock() (*vault.Vault, error) {
 	dir := paths.Dir()
 	if !vault.Exists(dir) {
-		return create(dir)
+		v, err := create(dir)
+		if err == nil {
+			if err := pinVault(dir); err != nil {
+				fmt.Fprintln(os.Stderr, "tuon: couldn't record the lock's fingerprint:", err)
+			}
+		}
+		return v, err
+	}
+	if err := checkVaultPin(dir); err != nil { // the app can write vault.json: was it rewritten?
+		return nil, err
 	}
 	if vault.Kind(dir) == vault.KindEnclave {
 		h := vault.FindHelper()

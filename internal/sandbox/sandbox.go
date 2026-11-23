@@ -152,7 +152,8 @@ func Profile(home, tmp, exe string, gatePort int) string {
 	b.WriteString("(version 1)\n(allow default)\n")
 	// reads in your home: only tuon's folder, its program folder and the
 	// attachment folders. Not ~/Projects, dotfiles or anything else.
-	readable := []string{filepath.Join(home, ".config", "tuon"), filepath.Dir(realDir(exe)), filepath.Dir(exe)}
+	readable := []string{filepath.Join(home, ".config", "tuon"), filepath.Dir(realDir(exe)), filepath.Dir(exe),
+		filepath.Join(home, ".CFUserTextEncoding")} // pbcopy, afplay & co read the text encoding setting
 	for _, f := range ReadableFolders {
 		readable = append(readable, filepath.Join(home, f), realDir(filepath.Join(home, f)))
 	}
@@ -186,9 +187,11 @@ func Profile(home, tmp, exe string, gatePort int) string {
 		}
 	}
 	b.WriteString(")\n")
-	// writes: tuon's folder, Downloads, this user's temp folders, terminals
+	// writes: tuon's folder, this user's temp folder (T only: its parent
+	// also holds every other app's caches, C/), terminals. Not Downloads:
+	// the launcher saves files there, marked as downloaded (OpSave).
 	b.WriteString("(deny file-write* (require-not (require-any\n")
-	for _, p := range []string{filepath.Join(home, ".config", "tuon"), filepath.Join(home, "Downloads"), filepath.Dir(tmp)} {
+	for _, p := range []string{filepath.Join(home, ".config", "tuon"), tmp} {
 		b.WriteString("  (subpath " + q(p) + ")\n")
 	}
 	b.WriteString(`  (regex #"^/dev/(null|zero|tty|ttys[0-9]+|dtracehelper|random|urandom)$")` + "\n")
@@ -249,7 +252,7 @@ func DevProfile(home, tmp, repo, gopath, cache string, net, live bool) string {
 		}
 		b.WriteString(")\n")
 	}
-	write := []string{cache, filepath.Dir(tmp)}
+	write := []string{cache, tmp}
 	if live {
 		write = append(write, filepath.Join(home, ".config", "tuon"))
 	}

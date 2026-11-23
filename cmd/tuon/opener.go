@@ -88,6 +88,16 @@ func handleOpen(req opener.Request) opener.Reply {
 			return opener.Reply{} // no file copied (text on the clipboard reads as a made-up path)
 		}
 		return handFile(p)
+	case opener.OpSave:
+		if len(req.Args) != 2 {
+			return fail(errors.New("a file and its name"))
+		}
+		dst, err := saveToDownloads(req.Args[0], req.Args[1])
+		if err != nil {
+			return fail(err)
+		}
+		_ = exec.CommandContext(ctx, "/usr/bin/open", "-R", dst).Run() // shown, not opened
+		return opener.Reply{Text: dst}
 	case opener.OpPickFile:
 		// only a file you pick in the launcher's own Open dialog: the app
 		// (which may run a bad library) can't choose what gets read

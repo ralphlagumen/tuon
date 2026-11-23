@@ -35,3 +35,27 @@ func TestNoWriteThroughLinks(t *testing.T) {
 		}
 	}
 }
+
+// TestAppendNeverThroughLink: a link planted where a log goes (the app can
+// write tuon's folder) is replaced, never written through.
+func TestAppendNeverThroughLink(t *testing.T) {
+	dir := t.TempDir()
+	victim := filepath.Join(dir, "zshrc")
+	_ = os.WriteFile(victim, []byte("keep\n"), 0o600)
+	log := filepath.Join(dir, "keytrace-launcher.log")
+	if err := os.Symlink(victim, log); err != nil {
+		t.Fatal(err)
+	}
+	f, err := Append(log, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = f.WriteString("trace\n")
+	f.Close()
+	if b, _ := os.ReadFile(victim); string(b) != "keep\n" {
+		t.Fatalf("wrote through the link: %q", b)
+	}
+	if st, err := os.Lstat(log); err != nil || st.Mode()&os.ModeSymlink != 0 {
+		t.Fatal("the link should be replaced by a real file")
+	}
+}

@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/ralph/tuon/internal/safefile"
 )
 
 // Trace records terminal input (Masked) with times, when TUON_KEYTRACE=1:
@@ -22,7 +24,9 @@ func OpenTrace(dir, name string) *Trace {
 	if os.Getenv("TUON_KEYTRACE") != "1" {
 		return nil
 	}
-	f, err := os.OpenFile(filepath.Join(dir, "keytrace-"+name+".log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	// never through a link: the sandboxed app can write in dir, and the
+	// launcher (outside the sandbox) opens its trace here too
+	f, err := safefile.Append(filepath.Join(dir, "keytrace-"+name+".log"), 0o600)
 	if err != nil {
 		return nil
 	}

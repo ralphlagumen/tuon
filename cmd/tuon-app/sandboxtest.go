@@ -71,7 +71,7 @@ func sandboxTest() int {
 	check("write ~/.local/bin/tuon-probe (tuon's binary)", false, write(filepath.Join(home, ".local", "bin", "tuon-probe")))
 	check("write ~/Desktop/tuon-probe", false, write(filepath.Join(home, "Desktop", "tuon-probe")))
 	check("write ~/.config/tuon (its own data)", true, write(filepath.Join(store.Dir(), "sandbox-probe")))
-	check("write ~/Downloads (saved files)", true, write(filepath.Join(home, "Downloads", ".tuon-probe")))
+	check("write ~/Downloads (saved files go via the launcher)", false, write(filepath.Join(home, "Downloads", ".tuon-probe")))
 	check("write temp folder (photos for the viewer)", true, write(filepath.Join(os.TempDir(), "tuon-probe")))
 	check("read ~/Desktop (attachments you pick)", true, read(filepath.Join(home, "Desktop")))
 	check("read ~/Downloads", true, read(filepath.Join(home, "Downloads")))
@@ -82,6 +82,10 @@ func sandboxTest() int {
 	check("read ~/.claude", false, read(filepath.Join(home, ".claude")))
 	check("read other apps' containers", false, read(filepath.Join(home, "Library", "Containers")))
 	check("write /private/tmp (shared temp)", false, write("/private/tmp/tuon-probe"))
+	pin := filepath.Join(home, "Library", "Application Support", "tuon", "vault-pin")
+	check("read the launcher's vault pin", false, read(pin))
+	check("write the launcher's vault pin", false, write(pin+"-probe"))
+	check("write other apps' caches (temp C/)", false, write(filepath.Join(filepath.Dir(filepath.Clean(os.TempDir())), "C", "tuon-probe")))
 	if base := paths.WorkBase(); base != "" { // the launcher's update and login folders
 		_ = os.MkdirAll(base, 0o700) // refused in here; the launcher makes it
 		check("write ~/Library/Caches/tuon (update, login)", false, write(filepath.Join(base, "sandbox-probe")))
@@ -141,6 +145,8 @@ func sandboxTest() int {
 		check("launcher opens a non-photo", false, err)
 		_, err = c.Do(opener.OpReveal, filepath.Join(home, ".zshrc"))
 		check("launcher shows a file outside Downloads", false, err)
+		_, err = c.Do(opener.OpSave, filepath.Join(home, ".config", "tuon", "tuon.db"), "x")
+		check("launcher saves a file from outside tuon's temp", false, err)
 	} else {
 		check("the launcher's opener is connected", true, errors.New("not connected"))
 	}

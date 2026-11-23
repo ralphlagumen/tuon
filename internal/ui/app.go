@@ -18,6 +18,7 @@ import (
 
 	"github.com/ralph/tuon/internal/connector"
 	"github.com/ralph/tuon/internal/connector/messenger"
+	"github.com/ralph/tuon/internal/opener"
 	"github.com/ralph/tuon/internal/store"
 )
 
@@ -2562,6 +2563,30 @@ func (m *Model) saveFile(md connector.Media) tea.Cmd {
 		b, err := conn.FetchMedia(ctx, md)
 		if err != nil {
 			return toastMsg{"couldn't save the file: " + err.Error()}
+		}
+		if c := opener.Connect(); c != nil {
+			// sandboxed: the app can't write Downloads; the launcher moves
+			// the file there and marks it as downloaded
+			dir := filepath.Join(os.TempDir(), "tuon")
+			_ = os.MkdirAll(dir, 0o700)
+			f, err := os.CreateTemp(dir, "save-*")
+			if err != nil {
+				return toastMsg{"couldn't save the file: " + err.Error()}
+			}
+			_, err = f.Write(b)
+			if cerr := f.Close(); err == nil {
+				err = cerr
+			}
+			if err != nil {
+				os.Remove(f.Name())
+				return toastMsg{"couldn't save the file: " + err.Error()}
+			}
+			rep, err := c.Do(opener.OpSave, f.Name(), safeFileName(md.Name))
+			if err != nil {
+				os.Remove(f.Name())
+				return toastMsg{"couldn't save the file: " + err.Error()}
+			}
+			return toastMsg{"Saved to " + shortHome(rep.Text)}
 		}
 		path := uniquePath(filepath.Join(downloadsDir(), safeFileName(md.Name)))
 		if err := os.WriteFile(path, b, 0o600); err != nil {

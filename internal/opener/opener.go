@@ -32,6 +32,7 @@ const (
 	OpClipImage = "clip-image" // reply Data: PNG bytes on the clipboard
 	OpClipFile  = "clip-file"  // reply Text: name, Data: contents of a file copied in Finder
 	OpPickFile  = "pick-file"  // reply Text: name, Data: contents of the file you pick in the Open dialog
+	OpSave      = "save"       // Args: a file in $TMPDIR/tuon, its name; reply Text: where it was saved in ~/Downloads
 )
 
 // MaxFile: the largest file the launcher hands over (Messenger's limit).
