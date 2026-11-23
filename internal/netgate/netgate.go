@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -52,10 +53,38 @@ func Allowed(hostport string) bool {
 	return false
 }
 
+// Upload alarms. tuon's whole history and keys are a few MB, so a theft
+// through Meta (sent to the thief's account) is small; what gives it away
+// is when it happens. You send things right after typing; an idle tuon
+// uploads only protocol chatter (KBs). So: more than IdleWarnBytes
+// uploaded within IdleWindow while you've been idle is unusual, and so is
+// more than TotalWarnBytes in one run (bulk).
+const (
+	IdleAfter      = 5 * time.Minute // no key or mouse input for this long = idle
+	IdleWindow     = 10 * time.Minute
+	IdleWarnBytes  = 1 << 20
+	TotalWarnBytes = 200 << 20
+)
+
 // Gate counts what went through and what was refused.
 type Gate struct {
 	// OnRefuse is called (in its own goroutine) for each refused target.
 	OnRefuse func(target string)
+	// OnUnusual is called (in its own goroutine) when uploads look unusual.
+	OnUnusual func(msg string)
+	// Idle reports whether you've been away from the keyboard IdleAfter
+	// or longer (nil: never counted as idle).
+	Idle func() bool
+	now  func() time.Time
+
+	up, down atomic.Int64
+	idleMu   sync.Mutex
+	idleUp   int64     // all idle upload this run
+	bucket   time.Time // start of the current IdleWindow
+	inBucket int64
+	warned   bool  // this window already warned
+	maxIdle  int64 // the most idle upload seen in one window (for tuning)
+	totalAt  int64 // next TotalWarnBytes mark
 	// dial connects to an allowed target (net.DialTimeout; tests swap it).
 	dial func(network, addr string, timeout time.Duration) (net.Conn, error)
 
@@ -65,7 +94,7 @@ type Gate struct {
 }
 
 func New() *Gate {
-	return &Gate{dial: net.DialTimeout, allowed: map[string]int{}, refused: map[string]int{}}
+	return &Gate{dial: net.DialTimeout, now: time.Now, allowed: map[string]int{}, refused: map[string]int{}, totalAt: TotalWarnBytes}
 }
 
 // Serve accepts connections until l is closed.
@@ -111,11 +140,81 @@ func (g *Gate) handle(c net.Conn) {
 	}
 	_ = c.SetDeadline(time.Time{})
 	done := make(chan struct{}, 2)
-	go func() { _, _ = io.Copy(up, br); closeWrite(up); done <- struct{}{} }() // br: bytes already read stay in order
-	go func() { _, _ = io.Copy(c, up); closeWrite(c); done <- struct{}{} }()
+	go func() { _, _ = io.Copy(counter{up, g.sent}, br); closeWrite(up); done <- struct{}{} }() // br: bytes already read stay in order
+	go func() { _, _ = io.Copy(counter{c, g.received}, up); closeWrite(c); done <- struct{}{} }()
 	<-done
 	<-done
 }
+
+// counter passes writes on and counts them.
+type counter struct {
+	w   io.Writer
+	add func(int)
+}
+
+func (c counter) Write(p []byte) (int, error) {
+	n, err := c.w.Write(p)
+	c.add(n)
+	return n, err
+}
+
+func (g *Gate) received(n int) { g.down.Add(int64(n)) }
+
+// sent counts upload toward Meta and raises the alarms above.
+func (g *Gate) sent(n int) {
+	if n <= 0 {
+		return
+	}
+	total := g.up.Add(int64(n))
+	var msgs []string
+	g.idleMu.Lock()
+	if total >= g.totalAt {
+		msgs = append(msgs, fmt.Sprintf("tuon uploaded %s to Meta this run, far more than normal", size(total)))
+		for g.totalAt <= total {
+			g.totalAt += TotalWarnBytes
+		}
+	}
+	if g.Idle != nil && g.Idle() {
+		now := g.now()
+		if now.Sub(g.bucket) > IdleWindow {
+			g.bucket, g.inBucket, g.warned = now, 0, false
+		}
+		g.inBucket += int64(n)
+		g.idleUp += int64(n)
+		g.maxIdle = max(g.maxIdle, g.inBucket)
+		if g.inBucket > IdleWarnBytes && !g.warned {
+			g.warned = true
+			msgs = append(msgs, fmt.Sprintf("tuon uploaded %s while you were away from the keyboard", size(g.inBucket)))
+		}
+	}
+	g.idleMu.Unlock()
+	if g.OnUnusual != nil {
+		for _, m := range msgs {
+			go g.OnUnusual(m)
+		}
+	}
+}
+
+// Traffic: bytes up and down this run, idle upload, and the most idle
+// upload in one window.
+func (g *Gate) Traffic() (up, down, idleUp, maxIdle int64) {
+	g.idleMu.Lock()
+	defer g.idleMu.Unlock()
+	return g.up.Load(), g.down.Load(), g.idleUp, g.maxIdle
+}
+
+func size(n int64) string {
+	switch {
+	case n >= 1<<20:
+		return fmt.Sprintf("%.1f MB", float64(n)/(1<<20))
+	case n >= 1<<10:
+		return fmt.Sprintf("%d KB", n>>10)
+	}
+	return fmt.Sprintf("%d B", n)
+}
+
+// Size formats a byte count the way the gate's messages do.
+func Size(n int64) string { return size(n) }
 
 func closeWrite(c net.Conn) {
 	if t, ok := c.(*net.TCPConn); ok {

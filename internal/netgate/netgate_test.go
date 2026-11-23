@@ -120,3 +120,54 @@ func TestCleanHostileTarget(t *testing.T) {
 		t.Fatalf("control codes kept: %q", got)
 	}
 }
+
+// TestUploadAlarms: uploads while you're typing never alarm; 1 MB+ while
+// idle within one window does, once per window; a bulk run does too.
+func TestUploadAlarms(t *testing.T) {
+	g := New()
+	clock := time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC)
+	g.now = func() time.Time { return clock }
+	idle := false
+	g.Idle = func() bool { return idle }
+	alarms := make(chan string, 10)
+	g.OnUnusual = func(m string) { alarms <- m }
+	expect := func(n int, why string) {
+		t.Helper()
+		time.Sleep(50 * time.Millisecond)
+		if len(alarms) != n {
+			t.Fatalf("%s: %d alarms, want %d", why, len(alarms), n)
+		}
+	}
+
+	g.sent(20 << 20) // a 20 MB file you just sent
+	expect(0, "active upload")
+	idle = true
+	for i := 0; i < 100; i++ {
+		g.sent(4 << 10) // 400 KB of idle chatter
+	}
+	expect(0, "idle chatter")
+	g.sent(700 << 10) // past 1 MB idle in this window
+	expect(1, "idle upload")
+	if m := <-alarms; !strings.Contains(m, "away from the keyboard") {
+		t.Fatal(m)
+	}
+	g.sent(5 << 20)
+	expect(0, "same window warns once")
+	clock = clock.Add(11 * time.Minute) // a new window
+	g.sent(512 << 10)
+	expect(0, "new window, under 1 MB")
+	g.sent(600 << 10)
+	expect(1, "new window, over 1 MB")
+	<-alarms
+
+	idle = false
+	g.sent(TotalWarnBytes) // bulk
+	expect(1, "total")
+	if m := <-alarms; !strings.Contains(m, "far more than normal") {
+		t.Fatal(m)
+	}
+	up, _, idleUp, maxIdle := g.Traffic()
+	if up < TotalWarnBytes || idleUp != 400<<10+700<<10+5<<20+512<<10+600<<10 || maxIdle != 400<<10+700<<10+5<<20 {
+		t.Fatalf("traffic up=%d idle=%d max=%d", up, idleUp, maxIdle)
+	}
+}

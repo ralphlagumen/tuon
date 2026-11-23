@@ -27,12 +27,16 @@ func watchGate(p *tea.Program, log zerolog.Logger) {
 		defer f.Close()
 		sc := bufio.NewScanner(f)
 		for sc.Scan() {
-			target := strings.TrimSpace(sc.Text())
-			if target == "" {
-				continue
+			kind, text, _ := strings.Cut(strings.TrimSpace(sc.Text()), " ")
+			switch {
+			case text == "":
+			case kind == "refused":
+				log.Warn().Str("target", text).Msg("network gate refused a connection")
+				p.Send(ui.WarnMsg("Blocked a connection to " + text + ": not a Meta server (see ~/Library/Caches/tuon/net.log)"))
+			case kind == "unusual":
+				log.Warn().Str("what", text).Msg("network gate: unusual upload")
+				p.Send(ui.WarnMsg("Unusual upload: " + text + ". If you didn't send big files, check Messenger on your phone"))
 			}
-			log.Warn().Str("target", target).Msg("network gate refused a connection")
-			p.Send(ui.WarnMsg("Blocked a connection to " + target + ": not a Meta server (see ~/Library/Caches/tuon/net.log)"))
 		}
 	}()
 }

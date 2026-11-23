@@ -241,6 +241,7 @@ func relayKeys(in, ctl int, stop chan struct{}, trace *seq.Trace) {
 		m, err := unix.Read(in, buf)
 		if m > 0 {
 			trace.Bytes("in", buf[:m])
+			lastInput.Store(time.Now().UnixNano()) // you're here (the gate's idle-upload alarm)
 		}
 		if m <= 0 {
 			if err != nil && err != unix.EINTR && err != unix.EAGAIN {
