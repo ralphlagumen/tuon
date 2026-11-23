@@ -52,6 +52,8 @@ and versions follow [Semantic Versioning](https://semver.org/).
   your projects, dotfiles or `~/.config`. `@~/` completes those folders. `ctrl+f` attaches any other file through the
   macOS Open dialog, run by the launcher, which hands over only the file you pick; a file copied in Finder is read by
   the launcher too. `tuon sandbox-test` checks it (45 checks).
+- `./scripts/deps-review.sh` lists every module a bump changes (not only watched ones) with its age, whether tuon
+  links it and a diff link, and refuses versions younger than 14 days unless allowed with `--allow mod@ver`.
 - Scan 2026-11-23: govulncheck finds nothing tuon calls. One module-level advisory, GO-2026-5932
   (`golang.org/x/crypto/openpgp`, unmaintained): tuon doesn't use that package; the fix is only in an untagged
   x/crypto build, so tuon waits for the next tagged release.

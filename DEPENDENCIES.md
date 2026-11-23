@@ -3,9 +3,14 @@
 Tuon runs other people's code with access to your Messenger account and encryption keys. A dependency update
 is where a supply-chain attack would get in, so updates are never automatic and always reviewed.
 
+Assume one of them will turn malicious some day. Every module linked into the chat app runs with the same rights,
+not only the watched ones below, so a bump is reviewed as a whole, and the sandbox limits what a bad one can do
+(SECURITY.md "Limits").
+
 ## Watched modules
 
-These handle the network, your session or encryption. Read the diff of every update to them.
+These handle the network, your session or encryption. Read their diffs line by line. Every other changed module:
+skim its diff, and never take a version younger than 14 days.
 
 | Module | Why it matters | Reviewed version |
 |---|---|---|
@@ -22,11 +27,15 @@ These handle the network, your session or encryption. Read the diff of every upd
 ## Updating a dependency
 
 1. Update one thing at a time: `go get <module>@<version>` then `go mod tidy`.
-2. Run `./scripts/deps-review.sh`. It lists every module that changed, flags watched ones, checks checksums
-   (`go mod verify`) and scans for known vulnerabilities.
-3. For each **watched** module that changed: read the diff between the old and new version
-   (`https://github.com/<owner>/<repo>/compare/<old>...<new>`). Look for new network calls, new places that
-   read keys or cookies, obfuscated code, install-time scripts, or a new maintainer.
+2. Run `./scripts/deps-review.sh`. It lists **every** module that changed in `go.mod` (a bump usually drags others
+   along), whether tuon links it, whether it's watched, its age and a link to its diff (or a local `diff -ru`
+   command). It **refuses any version younger than 14 days**: a hijacked maintainer account usually ships a fresh
+   release, and most are caught within days. For a fix to a vulnerability tuon is actually hit by, pass
+   `--allow module@version`. The age is the module proxy's commit time, which the author sets, so it stops a rushed
+   release, not a carefully backdated one. Then it checks checksums and scans for known vulnerabilities.
+3. Read the diffs: **watched** modules line by line, the rest skimmed. Look for new network calls, new places
+   that read keys, cookies or files, `init()` code, obfuscated or generated blobs, or a new maintainer. A brand-new
+   module gets read in full.
 4. Update the "Reviewed version" column above in the same commit, and say what you checked in the commit message.
 5. Run `./scripts/check.sh` (tests run sandboxed), build, and test tuon on your account before releasing. Run any
    `TUON_LIVE` test through `go run ./scripts/devsandbox --live -- go test …`: a new version's code runs there first.
