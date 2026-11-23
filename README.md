@@ -127,7 +127,7 @@ With a message selected:
 
 Attached files appear in your text as `[Image #1]` or `[File #2]`. Delete the token to drop the file. Your message shows right away as "sending…", and as "not sent" if Messenger hasn't confirmed it after 45 seconds. If sending fails, your text (and any files not sent) go back in the box.
 
-Type `:` in the chat list for commands, or just their first letter: `:mute` (`:m`), `:sound` (`:s`: pick the new-message sound and volume; `:s off` turns it off), `:images off` (`:i off`), `:previews off` (`:p off`: no message text in the chat list, for when someone can see your screen), `:seen off` (`:r off`: stop marking chats read on Messenger), `:lock` (`:l`; tuon also locks after 10 minutes idle), `:help` (`:h`), `:quit` (`:q`).
+Type `:` in the chat list for commands, or just their first letter: `:mute` (`:m`), `:hush` / `:unhush` (hide a chat from every view; `:hushed` or `:H` lists them), `:delete` (delete a chat and its messages from tuon, asks first; it comes back if they message you), `:sound` (`:s`: pick the new-message sound and volume; `:s off` turns it off), `:images off` (`:i off`), `:previews off` (`:p off`: no message text in the chat list, for when someone can see your screen), `:seen off` (`:r off`: stop marking chats read on Messenger), `:lock` (`:l`; tuon also locks after 10 minutes idle), `:help` (`:h`), `:quit` (`:q`).
 
 From your shell:
 

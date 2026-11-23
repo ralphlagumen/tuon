@@ -31,6 +31,9 @@ const (
 	Inbox    Space = "inbox"
 	// Unread isn't a folder: it shows unread chats from every folder.
 	Unread Space = "\x00unread"
+	// Hushed is a hidden view: chats you've silenced so they don't appear
+	// anywhere unless you ask for them with :hushed.
+	Hushed Space = "\x00hushed"
 )
 
 type Store struct {
@@ -73,6 +76,7 @@ type ChatRow struct {
 	Display string // name to show: chat name, else contact name, else ID
 	Space   Space
 	Muted   bool
+	Hushed  bool
 }
 
 type MessageRow struct {
@@ -350,6 +354,7 @@ func openDSN(path, dsn string, scrub func(error) error) (*Store, error) {
 	if _, err := db.Exec(`ALTER TABLE tuon_messages ADD COLUMN missing INTEGER NOT NULL DEFAULT 0`); err == nil {
 		_, _ = db.Exec(`UPDATE tuon_messages SET missing = 1 WHERE media LIKE '%"Kind":"missing"%'`)
 	}
+	_, _ = db.Exec(`ALTER TABLE tuon_chats ADD COLUMN hushed INTEGER NOT NULL DEFAULT 0`)
 	// first run with folders: start with Work and Personal (and move chats
 	// tagged before folders existed)
 	var n int
@@ -449,6 +454,9 @@ ON CONFLICT(id) DO UPDATE SET
 	               THEN excluded.snippet ELSE snippet END,
 	unread  = CASE WHEN excluded.last_ts > last_ts
 	               THEN (excluded.unread AND excluded.last_ts > read_ts) ELSE unread END,
+	-- your own message (or one in the chat you're in) means read up to it,
+	-- so Messenger's older read mark can't bring the chat back as unread
+	read_ts = CASE WHEN excluded.unread = 0 THEN MAX(read_ts, excluded.last_ts) ELSE read_ts END,
 	last_ts = MAX(last_ts, excluded.last_ts)`,
 		m.ChatID, s.enc(strings.Join(strings.Fields(snippet), " ")), m.Time.UnixMilli(), b2i(unread))
 	return !exists, err
@@ -541,7 +549,7 @@ func (s *Store) contactName(id string) string {
 	return name
 }
 
-const chatCols = `c.id, c.name, c.snippet, c.last_ts, c.unread, c.grp, c.encrypted, c.space, c.muted,
+const chatCols = `c.id, c.name, c.snippet, c.last_ts, c.unread, c.grp, c.encrypted, c.space, c.muted, c.hushed,
 	COALESCE(NULLIF(c.name, ''), ct.name, c.id)`
 
 func (s *Store) scanChatRow(row interface{ Scan(...any) error }) (ChatRow, error) {
@@ -554,10 +562,10 @@ func scanChat(rows interface{ Scan(...any) error }) (ChatRow, error) {
 	var r ChatRow
 	var ts int64
 	var space string
-	err := rows.Scan(&r.ID, &r.Name, &r.Snippet, &ts, &r.Unread, &r.Group, &r.Encrypted, &space, &r.Muted, &r.Display)
+	err := rows.Scan(&r.ID, &r.Name, &r.Snippet, &ts, &r.Unread, &r.Group, &r.Encrypted, &space, &r.Muted, &r.Hushed, &r.Display)
 	r.LastActivity = time.UnixMilli(ts)
 	r.Space = Space(space)
-	if r.Muted {
+	if r.Muted || r.Hushed {
 		r.Unread = false
 	}
 	return r, err
@@ -569,9 +577,11 @@ func (s *Store) Chats(space Space, query string) ([]ChatRow, error) {
 	rows, err := s.DB.Query(`SELECT `+chatCols+`
 FROM tuon_chats c LEFT JOIN tuon_contacts ct ON ct.id = c.id
 WHERE c.last_ts > 0
-	AND (? <> '' OR c.space = ? OR (? AND c.unread = 1 AND c.muted = 0))  -- searching looks everywhere
+	AND (? AND c.hushed = 1                                                -- :hushed view
+	  OR NOT ? AND c.hushed = 0                                            -- normal views hide hushed
+	    AND (? <> '' OR c.space = ? OR (? AND c.unread = 1 AND c.muted = 0)))
 	AND (? = '' OR COALESCE(NULLIF(c.name, ''), ct.name, c.id) LIKE '%' || ? || '%' ESCAPE '\')
-ORDER BY c.last_ts DESC`, query, string(space), space == Unread, query, likeText(query))
+ORDER BY c.last_ts DESC`, space == Hushed, space == Hushed, query, string(space), space == Unread, query, likeText(query))
 	if err != nil {
 		return nil, err
 	}
@@ -642,7 +652,7 @@ func (s *Store) nameUnnamed(r *ChatRow) {
 // UnreadCounts returns unread chats per space.
 func (s *Store) UnreadCounts() map[Space]int {
 	out := map[Space]int{}
-	rows, err := s.DB.Query(`SELECT space, COUNT(*) FROM tuon_chats WHERE unread = 1 AND muted = 0 GROUP BY space`)
+	rows, err := s.DB.Query(`SELECT space, COUNT(*) FROM tuon_chats WHERE unread = 1 AND muted = 0 AND hushed = 0 GROUP BY space`)
 	if err != nil {
 		return out
 	}
@@ -664,6 +674,49 @@ func (s *Store) SetSpace(chatID string, sp Space) error {
 
 func (s *Store) ToggleMute(chatID string) error {
 	_, err := s.DB.Exec(`UPDATE tuon_chats SET muted = 1 - muted WHERE id = ?`, chatID)
+	return err
+}
+
+func (s *Store) SetHushed(chatID string, on bool) error {
+	v := 0
+	if on {
+		v = 1
+	}
+	_, err := s.DB.Exec(`UPDATE tuon_chats SET hushed = ?, muted = MAX(muted, ?) WHERE id = ?`, v, v, chatID)
+	return err
+}
+
+func (s *Store) DeleteChat(chatID string) error {
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, q := range []string{
+		`DELETE FROM tuon_reactions WHERE chat_id = ?`,
+		`DELETE FROM tuon_messages WHERE chat_id = ?`,
+		`DELETE FROM tuon_participants WHERE chat_id = ?`,
+		`DELETE FROM tuon_drafts WHERE chat_id = ?`,
+		`DELETE FROM tuon_alias WHERE from_id = ? OR to_id = ?`,
+		`DELETE FROM tuon_chats WHERE id = ?`,
+	} {
+		args := []any{chatID}
+		if strings.Count(q, "?") == 2 {
+			args = append(args, chatID)
+		}
+		if _, err := tx.Exec(q, args...); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// ReadUpTo: you read the chat up to t somewhere else (your phone). It
+// stays unread only if something newer came in.
+func (s *Store) ReadUpTo(chatID string, t time.Time) error {
+	ms := t.UnixMilli()
+	_, err := s.DB.Exec(`UPDATE tuon_chats SET read_ts = MAX(read_ts, ?1),
+	unread = CASE WHEN ?1 >= last_ts THEN 0 ELSE unread END WHERE id = ?2`, ms, chatID)
 	return err
 }
 
@@ -1028,6 +1081,8 @@ func Label(sp Space) string {
 		return "Inbox"
 	case Unread:
 		return "Unread"
+	case Hushed:
+		return "Hushed"
 	}
 	return string(sp)
 }
@@ -1039,6 +1094,8 @@ func cleanName(name string) (string, error) {
 		return "", fmt.Errorf("give the folder a name")
 	case strings.EqualFold(name, string(Inbox)):
 		return "", fmt.Errorf("Inbox is built in")
+	case strings.EqualFold(name, "hushed"):
+		return "", fmt.Errorf("Hushed is built in")
 	case len([]rune(name)) > 24:
 		return "", fmt.Errorf("keep folder names under 24 characters")
 	}
@@ -1122,7 +1179,7 @@ func (s *Store) MoveSpace(sp Space, d int) error {
 // SpaceCounts: how many chats are in each space.
 func (s *Store) SpaceCounts() map[Space]int {
 	out := map[Space]int{}
-	rows, err := s.DB.Query(`SELECT space, COUNT(*) FROM tuon_chats WHERE last_ts > 0 GROUP BY space`)
+	rows, err := s.DB.Query(`SELECT space, COUNT(*) FROM tuon_chats WHERE last_ts > 0 AND hushed = 0 GROUP BY space`)
 	if err != nil {
 		return out
 	}
@@ -1241,6 +1298,7 @@ func (s *Store) Merge(from, to string) error {
 			last_ts   = MAX(last_ts, (SELECT last_ts FROM tuon_chats WHERE id = ?1)),
 			read_ts   = MAX(read_ts, (SELECT read_ts FROM tuon_chats WHERE id = ?1)),
 			muted     = MAX(muted, (SELECT muted FROM tuon_chats WHERE id = ?1)),
+			hushed    = MAX(hushed, (SELECT hushed FROM tuon_chats WHERE id = ?1)),
 			encrypted = MAX(encrypted, (SELECT encrypted FROM tuon_chats WHERE id = ?1)),
 			space     = CASE WHEN space = 'inbox' THEN (SELECT space FROM tuon_chats WHERE id = ?1) ELSE space END
 		WHERE id = ?2 AND EXISTS (SELECT 1 FROM tuon_chats WHERE id = ?1)`,
@@ -1316,6 +1374,8 @@ func (s *Store) Apply(e any, openID string) (isNew bool) {
 	case connector.MessageEvent:
 		e.Message.ChatID = s.Resolve(e.Message.ChatID)
 		isNew, _ = s.AddMessage(e.Message, e.Message.ChatID == openID)
+	case connector.ReadEvent:
+		_ = s.ReadUpTo(s.Resolve(e.ChatID), e.UpTo)
 	case connector.MessageRemovedEvent:
 		_ = s.RemoveMessage(e.ID)
 	case connector.ReactionEvent:

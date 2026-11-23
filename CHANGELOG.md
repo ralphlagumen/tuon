@@ -5,6 +5,50 @@ and versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- Drag over a message or the draft to select and copy text; double-click takes a word, triple-click a line.
+- Group chats show ⁂ after their name; encrypted chats show 🔒 in the list and header.
+- `:hush` hides a chat from every view (muted, out of Unread and folders); `:hushed` (`:H`) lists them, `:unhush`
+  brings one back. `:delete` removes a chat and its messages from tuon after a second `:delete` to confirm; it
+  comes back if they message you.
+- `@everyone` in group chats (encrypted groups tag each current member).
+- Reactions sit in a pill under the message; picking a message shows who reacted.
+- In Terminal.app, ❤ and a few other symbols show as color emoji.
+- A notice in every encrypted chat with someone whose security key changed, plus a warning in the header.
+- `TUON_KEYTRACE=1` records key input (typed characters masked); `kill -USR1` writes goroutine stacks to `tuon.log`.
+
+### Changed
+- No "Seen" while tuon is locked or the terminal window is in the background; unlocking or coming back sends it.
+  Placeholders and tuon's own notices are never sent as read.
+- Passphrase mode: 6-character minimum; after a wrong passphrase the wait hides and drops what you type.
+- Real names over group nicknames when tagging and in who reacted.
+
+### Fixed
+- A chat you read on your phone (or the web) now shows as read in tuon too, also with read receipts off on the
+  phone. Before, it stayed unread until you opened it in tuon.
+- A chat you replied to from tuon no longer comes back unread after you quit and reopen tuon.
+- Freeze when scrolling fast; fast scrolling no longer falls seconds behind or types mouse reports into the box,
+  also when `esc` is pressed mid-scroll.
+- Emoji cursor codes no longer push rows right after truncation.
+- People known only by nickname were missing from `@` suggestions.
+- `tuon history` missed removals, key changes and 1:1 merges.
+
+### Security
+- tuon-app ignores `HTTP(S)_PROXY` / `ALL_PROXY` (the header says when one was ignored); `tuon update` runs git, go
+  and swiftc without proxy settings.
+- Logout `--wipe`, account switch and relink overwrite the session, `vault.json`, old photo cache and login profile
+  with zeros before deleting them. Encrypting an old plain `tuon.db` zeroes the plain file too.
+- Arc dropped from the login browsers.
+- Go 1.27.4 (GO-2026-6859, net/http header race).
+- The sandboxed app gets only the environment it needs: no SSH agent socket, tokens or other tools' variables. It
+  can't connect to Unix sockets (SSH agent, Docker) either. `tuon sandbox-test` checks both (37 checks).
+- `./scripts/check.sh` runs tests and govulncheck in a sandbox (`scripts/devsandbox`), since they run dependency
+  code: no home folder, SSH agent, sockets or repo writes, and tests get no internet. It fails if the release signing
+  key is loaded in the SSH agent.
+- Scan 2026-11-23: govulncheck finds nothing tuon calls. One module-level advisory, GO-2026-5932
+  (`golang.org/x/crypto/openpgp`, unmaintained): tuon doesn't use that package; the fix is only in an untagged
+  x/crypto build, so tuon waits for the next tagged release.
+
 ## [0.4.0] - 2026-11-09
 
 **Upgrading from 0.3.0:** run `tuon update` twice. The first run installs the new launcher; the second adds the chat

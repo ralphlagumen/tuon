@@ -165,6 +165,58 @@ func TestReadStaysRead(t *testing.T) {
 	}
 }
 
+func TestReadOnPhone(t *testing.T) {
+	st, err := OpenPath(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	t0 := time.Now().Add(-time.Hour)
+	_, _ = st.AddMessage(connector.Message{ID: "m1", ChatID: "c", SenderID: "2", Text: "x", Time: t0}, false)
+	if c, _ := st.Chat("c"); !c.Unread {
+		t.Fatal("setup: should be unread")
+	}
+	// read on the phone a bit later
+	st.Apply(connector.ReadEvent{ChatID: "c", UpTo: t0.Add(time.Second)}, "")
+	if c, _ := st.Chat("c"); c.Unread {
+		t.Fatal("reading on the phone should mark it read")
+	}
+	// Messenger's stale chat row (encrypted chats keep an old watermark) must not undo it
+	_ = st.UpsertChat(connector.Chat{ID: "c", LastActivity: t0, Unread: true})
+	if c, _ := st.Chat("c"); c.Unread {
+		t.Fatal("a stale chat row made it unread again")
+	}
+	// a read that's older than the newest message leaves it unread
+	_, _ = st.AddMessage(connector.Message{ID: "m2", ChatID: "c", SenderID: "2", Text: "y", Time: t0.Add(time.Minute)}, false)
+	st.Apply(connector.ReadEvent{ChatID: "c", UpTo: t0.Add(30 * time.Second)}, "")
+	if c, _ := st.Chat("c"); !c.Unread {
+		t.Fatal("an older read must not hide a newer message")
+	}
+}
+
+func TestOwnMessageStaysRead(t *testing.T) {
+	st, err := OpenPath(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	t0 := time.Now().Add(-time.Hour)
+	_, _ = st.AddMessage(connector.Message{ID: "in", ChatID: "c", SenderID: "2", Text: "x", Time: t0}, false)
+	_ = st.MarkRead("c")
+	// you reply from tuon, then quit
+	_, _ = st.AddMessage(connector.Message{ID: "out", ChatID: "c", SenderID: "1", Text: "y", Time: t0.Add(time.Minute), FromMe: true}, false)
+	// next start: Messenger's chat row still has the old read mark
+	_ = st.UpsertChat(connector.Chat{ID: "c", LastActivity: t0.Add(time.Minute), Unread: true})
+	if c, _ := st.Chat("c"); c.Unread {
+		t.Fatal("a chat whose last message is yours came back unread")
+	}
+	// their next message still makes it unread
+	_, _ = st.AddMessage(connector.Message{ID: "in2", ChatID: "c", SenderID: "2", Text: "z", Time: t0.Add(2 * time.Minute)}, false)
+	if c, _ := st.Chat("c"); !c.Unread {
+		t.Fatal("a new message after yours should be unread")
+	}
+}
+
 func TestMergeOneToOne(t *testing.T) {
 	st, err := OpenPath(filepath.Join(t.TempDir(), "t.db"))
 	if err != nil {

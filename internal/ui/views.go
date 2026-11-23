@@ -347,7 +347,9 @@ func (m Model) chatRow(c store.ChatRow, selected bool, lw int) []string {
 	t := ago(c.LastActivity)
 	nameW := max(4, lw-5-ansi.StringWidth(t))
 	name := termSafe(c.Display)
-	if c.Muted {
+	if c.Hushed {
+		name += " (hushed)"
+	} else if c.Muted {
 		name += " (muted)"
 	}
 	// a group chat carries a small mark right after its name; 1:1s stay plain
@@ -1052,6 +1054,9 @@ func (m Model) helpView() []string {
 		"",
 		head("commands"),
 		cmd(":m  :mute", "mute or unmute the chat"),
+		cmd(":hush  :unhush", "hide a chat from every view (:hushed to find it)"),
+		cmd(":H  :hushed", "show hushed chats"),
+		cmd(":delete", "delete a chat and its messages (asks to confirm)"),
 		cmd(":s  :sound", "new-message sound and volume"),
 		cmd(":l  :lock", "lock tuon now"),
 		cmd(":i  :images on|off", "photos inside the chat"),

@@ -294,6 +294,22 @@ func (c *Conn) fetchMoreThreads() {
 	}
 }
 
+// unread: Messenger's read mark is behind the chat's last activity, and
+// that last message isn't yours (your own send doesn't always move the
+// mark, so the chat came back unread after a restart).
+func (c *Conn) unread(readMs, activityMs, lastSender int64) bool {
+	return readMs < activityMs && (lastSender == 0 || lastSender != c.self)
+}
+
+// readElsewhere: you read chatID up to ms on another device.
+func (c *Conn) readElsewhere(chatID string, ms int64) {
+	if chatID == "" || chatID == "0" || ms <= 0 {
+		return
+	}
+	c.log.Warn().Str("chat", chatID).Msg("read on another device")
+	c.emit(connector.ReadEvent{ChatID: chatID, UpTo: time.UnixMilli(ms)})
+}
+
 // countThreads notes chats we hadn't seen this run.
 func (c *Conn) countThreads(tbl *table.LSTable) {
 	c.mu.Lock()
@@ -372,7 +388,7 @@ func (c *Conn) handleTable(tbl *table.LSTable) {
 			Name:         clean(t.ThreadName),
 			Snippet:      clean(oneLine(t.Snippet)),
 			LastActivity: time.UnixMilli(t.LastActivityTimestampMs),
-			Unread:       t.LastReadWatermarkTimestampMs < t.LastActivityTimestampMs,
+			Unread:       c.unread(t.LastReadWatermarkTimestampMs, t.LastActivityTimestampMs, t.SnippetSenderContactId),
 			Group:        !t.ThreadType.IsOneToOne(),
 			Encrypted:    t.ThreadType.IsWhatsApp(),
 		}})
@@ -387,10 +403,22 @@ func (c *Conn) handleTable(tbl *table.LSTable) {
 			Name:         clean(t.ThreadName),
 			Snippet:      clean(oneLine(t.Snippet)),
 			LastActivity: time.UnixMilli(t.LastActivityTimestampMs),
-			Unread:       t.LastReadWatermarkTimestampMs < t.LastActivityTimestampMs,
+			Unread:       c.unread(t.LastReadWatermarkTimestampMs, t.LastActivityTimestampMs, t.SnippetSenderContactId),
 			Group:        !t.ThreadType.IsOneToOne(),
 			Encrypted:    t.ThreadType.IsWhatsApp(),
 		}})
+	}
+	// you read a chat on another device
+	for _, r := range tbl.LSMarkThreadReadV2 {
+		c.readElsewhere(id(r.ThreadKey), r.LastReadWatermarkTimestampMs)
+	}
+	for _, r := range tbl.LSMarkThreadRead {
+		c.readElsewhere(id(r.ThreadKey), r.LastReadWatermarkTimestampMs)
+	}
+	for _, r := range tbl.LSUpdateReadReceipt {
+		if r.ContactId == c.self {
+			c.readElsewhere(id(r.ThreadKey), r.ReadWatermarkTimestampMs)
+		}
 	}
 	for _, t := range tbl.LSVerifyThreadExists {
 		c.knownType(t.ThreadKey, t.ThreadType)
@@ -609,6 +637,16 @@ func (c *Conn) onWA(raw any) {
 		return
 	case *events.UndecryptableMessage:
 		c.onUndecryptable(raw.(*events.UndecryptableMessage))
+		return
+	case *events.Receipt: // read on your other device (encrypted chats)
+		if e := raw.(*events.Receipt); e.Type == waTypes.ReceiptTypeReadSelf {
+			c.readElsewhere(e.Chat.User, e.Timestamp.UnixMilli())
+		}
+		return
+	case *events.MarkChatAsRead:
+		if e := raw.(*events.MarkChatAsRead); e.Action.GetRead() {
+			c.readElsewhere(e.JID.User, e.Timestamp.UnixMilli())
+		}
 		return
 	case *events.IdentityChange:
 		e := raw.(*events.IdentityChange)

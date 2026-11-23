@@ -92,6 +92,8 @@ type Model struct {
 	folderAskRm bool   // waiting for y to confirm delete
 	folderMove  bool   // m: carrying the folder; ↑↓ move it, enter drops
 
+	deleteAsk string // chat ID waiting for :delete confirmation
+
 	// chat
 	chat         *store.ChatRow
 	msgs         []store.MessageRow
@@ -564,7 +566,7 @@ func (m *Model) applyEvents(evts []any) tea.Cmd {
 	var refills []tea.Cmd
 	for _, e := range evts {
 		switch e := e.(type) {
-		case connector.ContactEvent, connector.MessageRemovedEvent, connector.ReactionEvent, connector.ParticipantEvent:
+		case connector.ContactEvent, connector.MessageRemovedEvent, connector.ReactionEvent, connector.ParticipantEvent, connector.ReadEvent:
 			m.st.Apply(e, openID)
 		case connector.ChatAliasEvent:
 			m.st.Apply(e, openID)
@@ -657,7 +659,7 @@ func (m *Model) reloadChats() {
 	for _, sp := range m.spaces {
 		known = known || sp == m.space
 	}
-	if !known && m.space != store.Unread { // the folder was renamed or deleted
+	if !known && m.space != store.Unread && m.space != store.Hushed {
 		m.space = m.spaces[0]
 	}
 	m.chats, _ = m.st.Chats(m.space, m.query)
@@ -1354,6 +1356,7 @@ func keptMentions(text string, ms []connector.Mention) []connector.Mention {
 // the sound off).
 var shortCommands = map[string]string{
 	"l": "lock", "s": "sound", "m": "mute", "i": "images", "p": "previews", "h": "help", "r": "seen",
+	"H": "hushed",
 }
 
 // expandCommand turns a shortcut into its command, keeping "on"/"off".
@@ -1367,6 +1370,9 @@ func expandCommand(cmd string) string {
 
 func (m Model) runCommand(cmd string) (tea.Model, tea.Cmd) {
 	cmd = expandCommand(strings.TrimSpace(cmd))
+	if cmd != "delete" {
+		m.deleteAsk = ""
+	}
 	switch cmd {
 	case "q", "quit":
 		return m, tea.Quit
@@ -1385,6 +1391,54 @@ func (m Model) runCommand(cmd string) (tea.Model, tea.Cmd) {
 			return m, m.flash("Muted " + termSafe(c.Display) + ": no sound, not in Unread")
 		}
 		return m, m.flash("Unmuted " + termSafe(c.Display))
+	case "hush":
+		id := m.targetChat()
+		if id == "" {
+			return m, nil
+		}
+		_ = m.st.SetHushed(id, true)
+		m.reloadChats()
+		c, _ := m.st.Chat(id)
+		return m, m.flash("Hushed " + termSafe(c.Display) + ": hidden everywhere, :hushed to find it")
+	case "unhush":
+		id := m.targetChat()
+		if id == "" {
+			return m, nil
+		}
+		_ = m.st.SetHushed(id, false)
+		m.reloadChats()
+		c, _ := m.st.Chat(id)
+		return m, m.flash("Unhushed " + termSafe(c.Display) + ": back in " + store.Label(c.Space))
+	case "hushed":
+		m.switchSpace(store.Hushed)
+		return m, tea.Batch(tea.ClearScreen, m.preview())
+	case "delete":
+		id := m.targetChat()
+		if id == "" {
+			return m, nil
+		}
+		if m.deleteAsk == id {
+			m.deleteAsk = ""
+			name := id
+			if c, err := m.st.Chat(id); err == nil {
+				name = termSafe(c.Display)
+			}
+			_ = m.st.DeleteChat(id)
+			delete(m.drafts, id)
+			delete(m.draftAtts, id)
+			if m.chat != nil && m.chat.ID == id {
+				m.chat, m.msgs = nil, nil
+				m.focus = focusList
+			}
+			m.reloadChats()
+			return m, m.flash("Deleted " + name + ". It comes back if they message you.")
+		}
+		c, err := m.st.Chat(id)
+		if err != nil {
+			return m, nil
+		}
+		m.deleteAsk = id
+		return m, m.flash("Delete " + termSafe(c.Display) + " and all its messages? :delete again to confirm")
 	case "sound off", "sound on":
 		m.soundOn = cmd == "sound on"
 		_ = m.st.SetSetting(settingSound, strings.TrimPrefix(cmd, "sound "))
@@ -1579,12 +1633,16 @@ func (m Model) unreadTotal() int {
 }
 
 // tabSpaces: the tabs shown. Unread comes first, but only while something
-// is unread (or you're on it).
+// is unread (or you're on it). Hushed appears only while you're on it.
 func (m Model) tabSpaces() []store.Space {
+	tabs := m.spaces
 	if m.unreadTotal() > 0 || m.space == store.Unread {
-		return append([]store.Space{store.Unread}, m.spaces...)
+		tabs = append([]store.Space{store.Unread}, tabs...)
 	}
-	return m.spaces
+	if m.space == store.Hushed {
+		tabs = append(tabs, store.Hushed)
+	}
+	return tabs
 }
 
 func (m Model) onTagKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {

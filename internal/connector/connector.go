@@ -121,7 +121,14 @@ func (a Attachment) IsImage() bool {
 
 // Events sent on Connector.Events().
 type (
-	ChatEvent    struct{ Chat Chat }
+	ChatEvent struct{ Chat Chat }
+	// ReadEvent: you read ChatID up to UpTo on another device (your phone,
+	// the web). Comes even with read receipts off: those only hide it from
+	// the other people.
+	ReadEvent struct {
+		ChatID string
+		UpTo   time.Time
+	}
 	MessageEvent struct{ Message Message }
 	ContactEvent struct{ ID, Name string }
 	// MessageRemovedEvent drops a message (a send that failed).
