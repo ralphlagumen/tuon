@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 )
@@ -28,4 +29,13 @@ func Command(app string, args []string, gatePort int) (*exec.Cmd, string) {
 	cmd.Env = append(AppEnv(os.Environ()), envMark+"=1")
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	return cmd, ""
+}
+
+// TempBase is the chat app's temp folder: the system's here.
+func TempBase() (string, error) { return os.TempDir(), nil }
+
+// Enter is Linux's enter step; elsewhere there's none.
+func Enter(string, []string) {
+	fmt.Fprintln(os.Stderr, "tuon: no sandbox enter step on this system")
+	os.Exit(1)
 }

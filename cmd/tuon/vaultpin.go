@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 
+	"github.com/ralph/tuon/internal/paths"
 	"github.com/ralph/tuon/internal/safefile"
 )
 
@@ -24,11 +25,18 @@ import (
 
 // pinPath: "" where there's no sandbox (the app could write anywhere).
 func pinPath() string {
-	if runtime.GOOS != "darwin" {
-		return ""
+	var base string
+	switch runtime.GOOS {
+	case "darwin":
+		base, _ = os.UserConfigDir() // ~/Library/Application Support
+	case "linux": // ~/.local/share: outside what the sandboxed app may touch
+		base = os.Getenv("XDG_DATA_HOME")
+		if !filepath.IsAbs(base) {
+			home, _ := os.UserHomeDir()
+			base = filepath.Join(home, ".local", "share")
+		}
 	}
-	base, err := os.UserConfigDir() // ~/Library/Application Support
-	if err != nil {
+	if base == "" || !filepath.IsAbs(base) {
 		return ""
 	}
 	return filepath.Join(base, "tuon", "vault-pin")
@@ -59,12 +67,22 @@ func pinVault(dir string) error {
 	return safefile.WriteFile(p, append(fp, '\n'), 0o600)
 }
 
-var errVaultChanged = errors.New(`tuon's lock file (vault.json) changed, and tuon didn't change it.
+var errVaultChanged = errors.New("tuon's lock file (vault.json) changed, and tuon didn't change it.")
+
+// vaultChanged says what happened and what to do, with this system's paths.
+func vaultChanged() error {
+	how := "a passphrase you don't know"
+	if runtime.GOOS == "darwin" {
+		how = "a passphrase instead of Touch ID"
+	}
+	return fmt.Errorf(`%w
   The chat app can write tuon's folder, so a misbehaving library could have rewritten it,
-  for example to open your data without Touch ID. tuon won't use it.
-  If you didn't reset tuon yourself: check ~/Library/Caches/tuon/net.log, then start over with
+  for example to open your data with %s. tuon won't use it.
+  If you didn't reset tuon yourself: check %s, then start over with
   'tuon logout --wipe' (your chats come back with your Messenger PIN).
-  If you did (restored a backup, copied tuon's folder): delete ~/Library/Application Support/tuon/vault-pin`)
+  If you did (restored a backup, copied tuon's folder): delete %s`,
+		errVaultChanged, how, filepath.Join(paths.WorkBase(), "net.log"), pinPath())
+}
 
 // checkVaultPin refuses a vault.json that changed since the launcher
 // pinned it. The first time (no pin yet), it pins what's there.
@@ -88,7 +106,7 @@ func checkVaultPin(dir string) error {
 		return err
 	}
 	if !bytes.Equal(bytes.TrimSpace(want), fp) {
-		return errVaultChanged
+		return vaultChanged()
 	}
 	return nil
 }

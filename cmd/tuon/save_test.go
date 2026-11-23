@@ -3,18 +3,23 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
-	"golang.org/x/sys/unix"
+	"github.com/ralph/tuon/internal/sandbox"
 )
 
 func TestSaveToDownloads(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	_ = os.MkdirAll(filepath.Join(home, "Downloads"), 0o700)
-	tmp := t.TempDir()
-	t.Setenv("TMPDIR", tmp)
+	t.Setenv("TMPDIR", t.TempDir())
+	t.Setenv("XDG_RUNTIME_DIR", "")
+	tmp, err := sandbox.TempBase() // the app's temp folder (its own on Linux)
+	if err != nil {
+		t.Fatal(err)
+	}
 	dir := filepath.Join(tmp, "tuon")
 	_ = os.MkdirAll(dir, 0o700)
 
@@ -30,9 +35,11 @@ func TestSaveToDownloads(t *testing.T) {
 	if b, _ := os.ReadFile(dst); string(b) != "PDFDATA" {
 		t.Fatalf("contents %q", b)
 	}
-	q := make([]byte, 64)
-	if n, err := unix.Getxattr(dst, "com.apple.quarantine", q); err != nil || !strings.HasPrefix(string(q[:n]), "0081;") {
+	if q, err := downloadMark(dst); runtime.GOOS == "darwin" && (err != nil || !strings.HasPrefix(q, "0081;")) {
 		t.Fatalf("no quarantine mark: %v", err)
+	}
+	if st, _ := os.Stat(dst); st.Mode().Perm()&0o111 != 0 {
+		t.Fatalf("saved file is executable: %v", st.Mode())
 	}
 	if _, err := os.Stat(src); !os.IsNotExist(err) {
 		t.Fatal("the temp copy should be gone")

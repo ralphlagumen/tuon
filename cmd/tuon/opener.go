@@ -3,17 +3,17 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"errors"
 	"io"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/ralph/tuon/internal/opener"
+	"github.com/ralph/tuon/internal/sandbox"
 )
 
 // handleOpen does what the sandboxed app asks through opener, after
@@ -37,7 +37,7 @@ func handleOpen(req opener.Request) opener.Reply {
 		if err != nil {
 			return fail(err)
 		}
-		return fail0(exec.CommandContext(ctx, "/usr/bin/open", u).Run())
+		return fail0(sysOpenURL(ctx, u))
 	case opener.OpPhotos:
 		if len(req.Args) == 0 || len(req.Args) > 100 {
 			return fail(errors.New("1 to 100 photos"))
@@ -54,8 +54,7 @@ func handleOpen(req opener.Request) opener.Reply {
 			}
 			paths = append(paths, q)
 		}
-		// Preview, never the file's default app: a "photo" can't run anything
-		return fail0(exec.CommandContext(ctx, "/usr/bin/open", append([]string{"-a", "Preview"}, paths...)...).Run())
+		return fail0(sysOpenPhotos(ctx, paths))
 	case opener.OpReveal:
 		if len(req.Args) != 1 {
 			return fail(errors.New("one file"))
@@ -64,30 +63,41 @@ func handleOpen(req opener.Request) opener.Reply {
 		if err != nil {
 			return fail(err)
 		}
-		return fail0(exec.CommandContext(ctx, "/usr/bin/open", "-R", q).Run()) // shown, not opened
+		return fail0(sysReveal(ctx, q)) // shown, not opened
 	case opener.OpClipImage:
-		out, err := exec.CommandContext(ctx, "/usr/bin/osascript", "-e", "the clipboard as «class PNGf»").Output()
-		if err != nil {
-			return fail(errors.New("no image"))
-		}
-		i := bytes.Index(out, []byte("PNGf"))
-		if i < 0 {
-			return fail(errors.New("no image"))
-		}
-		b, err := hex.DecodeString(strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(string(out[i+4:])), "»")))
-		if err != nil {
+		b := sysClipImage(ctx)
+		if len(b) == 0 {
 			return fail(errors.New("no image"))
 		}
 		return opener.Reply{Data: b}
 	case opener.OpClipFile:
-		// the file you copied in Finder: the app can't read most of your
-		// home folder, so the launcher hands over its contents
-		out, _ := exec.CommandContext(ctx, "/usr/bin/osascript", "-e", "POSIX path of (the clipboard as «class furl»)").Output()
-		p := strings.TrimSpace(string(out))
+		// the file you copied in your file manager: the app can't read most
+		// of your home folder, so the launcher hands over its contents
+		p := sysClipFile(ctx)
 		if _, err := os.Stat(p); p == "" || errors.Is(err, os.ErrNotExist) {
 			return opener.Reply{} // no file copied (text on the clipboard reads as a made-up path)
 		}
 		return handFile(p)
+	case opener.OpCopy:
+		if len(req.Args) != 1 || len(req.Args[0]) > opener.MaxText {
+			return fail(errors.New("one text, at most 1 MB"))
+		}
+		return fail0(sysCopy(ctx, req.Args[0]))
+	case opener.OpPaste:
+		t := sysPaste(ctx)
+		if len(t) > opener.MaxText {
+			t = t[:opener.MaxText]
+		}
+		return opener.Reply{Text: t}
+	case opener.OpSound:
+		if len(req.Args) != 2 || !soundName(req.Args[0]) {
+			return fail(errors.New("a sound's name and a volume"))
+		}
+		vol, err := strconv.Atoi(req.Args[1])
+		if err != nil || vol < 1 || vol > 200 {
+			return fail(errors.New("volume 1 to 200"))
+		}
+		return fail0(sysSound(req.Args[0], vol))
 	case opener.OpSave:
 		if len(req.Args) != 2 {
 			return fail(errors.New("a file and its name"))
@@ -96,18 +106,16 @@ func handleOpen(req opener.Request) opener.Reply {
 		if err != nil {
 			return fail(err)
 		}
-		_ = exec.CommandContext(ctx, "/usr/bin/open", "-R", dst).Run() // shown, not opened
+		_ = sysReveal(ctx, dst) // shown, not opened
 		return opener.Reply{Text: dst}
 	case opener.OpPickFile:
 		// only a file you pick in the launcher's own Open dialog: the app
 		// (which may run a bad library) can't choose what gets read
-		out, err := exec.CommandContext(ctx, "/usr/bin/osascript",
-			"-e", "tell me to activate",
-			"-e", `POSIX path of (choose file with prompt "Attach a file to send in tuon")`).Output()
-		if err != nil {
+		p := sysPickFile(ctx)
+		if p == "" {
 			return fail(errors.New("no file picked"))
 		}
-		return handFile(strings.TrimSpace(string(out)))
+		return handFile(p)
 	}
 	return fail(errors.New("unknown request"))
 }
@@ -154,7 +162,11 @@ func webLink(raw string) (string, error) {
 
 // photoDir is the app's photo folder for the viewer, $TMPDIR/tuon.
 func photoDir() (string, error) {
-	return filepath.EvalSymlinks(filepath.Join(os.TempDir(), "tuon"))
+	base, err := sandbox.TempBase() // the app's temp folder (its own on Linux)
+	if err != nil {
+		return "", err
+	}
+	return filepath.EvalSymlinks(filepath.Join(base, "tuon"))
 }
 
 var imageExt = map[string]bool{".png": true, ".jpg": true, ".jpeg": true, ".gif": true, ".webp": true}
@@ -218,4 +230,17 @@ func downloadsFile(p string) (string, error) {
 func within(dir, p string) bool {
 	rel, err := filepath.Rel(dir, p)
 	return err == nil && rel != "." && !strings.HasPrefix(rel, "..") && !filepath.IsAbs(rel)
+}
+
+// soundName: a plain sound name (letters, digits, - and _), never a path.
+func soundName(n string) bool {
+	if n == "" || len(n) > 64 {
+		return false
+	}
+	for _, r := range n {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_') {
+			return false
+		}
+	}
+	return true
 }

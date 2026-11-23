@@ -1,5 +1,6 @@
 // Package opener lets the sandboxed chat app ask the launcher for the few
-// things that must happen outside the sandbox on macOS: opening a web
+// things that must happen outside the sandbox (on Linux also the clipboard
+// and sounds, since the app may run no program there): opening a web
 // link, showing photos in Preview, showing a saved file in Finder, and
 // reading an image or file from the clipboard. The app can't start `open`
 // or `osascript` itself, because both can ask macOS to start any program,
@@ -33,7 +34,14 @@ const (
 	OpClipFile  = "clip-file"  // reply Text: name, Data: contents of a file copied in Finder
 	OpPickFile  = "pick-file"  // reply Text: name, Data: contents of the file you pick in the Open dialog
 	OpSave      = "save"       // Args: a file in $TMPDIR/tuon, its name; reply Text: where it was saved in ~/Downloads
+	// Linux only (there the app can't run any program; on macOS it runs pbcopy, pbpaste and afplay itself)
+	OpCopy  = "copy"  // Args[0]: text for the clipboard
+	OpPaste = "paste" // reply Text: the clipboard's text
+	OpSound = "sound" // Args: a sound's name, the volume (1–200)
 )
+
+// MaxText: the most text the launcher puts on or reads from the clipboard.
+const MaxText = 1 << 20
 
 // MaxFile: the largest file the launcher hands over (Messenger's limit).
 const MaxFile = 25 << 20

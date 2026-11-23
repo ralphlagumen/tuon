@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -119,6 +120,10 @@ func clipboardFile() string {
 }
 
 func clipboardText() string {
+	if c := viaLauncher(); c != nil {
+		rep, _ := c.Do(opener.OpPaste)
+		return strings.TrimRight(rep.Text, "\r\n")
+	}
 	ctx, cancel := timeout()
 	defer cancel()
 	var out []byte
@@ -139,10 +144,12 @@ func copyToClipboard(text string) error {
 	ctx, cancel := timeout()
 	defer cancel()
 	var err error
-	switch runtime.GOOS {
-	case "darwin":
+	switch c := viaLauncher(); {
+	case c != nil:
+		_, err = c.Do(opener.OpCopy, text)
+	case runtime.GOOS == "darwin":
 		_, err = runTool(ctx, text, "pbcopy")
-	case "windows":
+	case runtime.GOOS == "windows":
 		_, err = runTool(ctx, text, "powershell", "-NoProfile", "-Command", "$input | Set-Clipboard")
 	default:
 		_, err = firstOK(ctx, text, []string{"wl-copy"}, []string{"xclip", "-selection", "clipboard"}, []string{"xsel", "--clipboard", "--input"})
@@ -352,6 +359,12 @@ var playSound = playSoundOS // tests swap this out
 
 // playSoundOS plays a named sound at a volume (100 = normal, up to 200).
 func playSoundOS(name string, volume int) {
+	if c := viaLauncher(); c != nil {
+		if _, err := c.Do(opener.OpSound, name, strconv.Itoa(max(1, min(volume, 200)))); err != nil {
+			fmt.Print("\a") // the terminal's own bell
+		}
+		return
+	}
 	vol := float64(max(1, min(volume, 200))) / 100
 	switch runtime.GOOS {
 	case "darwin":
@@ -381,4 +394,14 @@ func playSoundOS(name string, volume int) {
 		}
 	}
 	fmt.Print("\a") // the terminal's own bell
+}
+
+// viaLauncher: on Linux the sandboxed app may run no program, so the
+// clipboard and sounds go through the launcher (macOS's app runs pbcopy,
+// pbpaste and afplay itself). nil: do it here.
+func viaLauncher() *opener.Client {
+	if runtime.GOOS != "linux" {
+		return nil
+	}
+	return opener.Connect()
 }

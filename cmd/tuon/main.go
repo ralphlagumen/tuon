@@ -32,6 +32,9 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 2 && os.Args[1] == sandbox.EnterArg { // Linux: restrict this process, then become the app
+		sandbox.Enter(os.Args[2], os.Args[3:])
+	}
 	setUmask()
 	sandbox.ClearMark()
 	args := os.Args[1:]

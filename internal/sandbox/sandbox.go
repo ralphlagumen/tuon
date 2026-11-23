@@ -38,6 +38,10 @@ import (
 
 const envMark = "TUON_SANDBOXED"
 
+// EnterArg: the launcher's first argument when it runs as the Linux
+// sandbox's enter step (see Enter).
+const EnterArg = "__tuon-sandbox-enter"
+
 // How the launcher and the sandboxed app talk.
 const (
 	// ExitBrowserLogin: the app wants a browser login, which can't run in

@@ -7,11 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
-	"time"
 	"unicode"
 
-	"golang.org/x/sys/unix"
+	"github.com/ralph/tuon/internal/safefile"
 )
 
 // maxSave: the biggest file tuon downloads (Messenger files, 100 MB).
@@ -30,7 +28,7 @@ func saveToDownloads(src, name string) (string, error) {
 	if q, err := filepath.EvalSymlinks(filepath.Dir(src)); err != nil || q != dir {
 		return "", errors.New("not a file from tuon")
 	}
-	in, err := os.OpenFile(src, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	in, err := os.OpenFile(src, os.O_RDONLY|safefile.NoFollow, 0)
 	if err != nil {
 		return "", errors.New("not a file from tuon")
 	}
@@ -55,7 +53,7 @@ func saveToDownloads(src, name string) (string, error) {
 			dst = filepath.Join(dl, fmt.Sprintf("%s (%d)%s", base, i, ext))
 		}
 		// a new file only, never through a link, never over an existing one
-		out, err = os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o600)
+		out, err = os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL|safefile.NoFollow, 0o600)
 		if err != nil && !errors.Is(err, os.ErrExist) {
 			return "", err
 		}
@@ -71,8 +69,7 @@ func saveToDownloads(src, name string) (string, error) {
 		os.Remove(dst)
 		return "", errors.New("couldn't save the file")
 	}
-	// flags 0081 = "downloaded, not yet opened" (what browsers set)
-	if err := unix.Setxattr(dst, "com.apple.quarantine", []byte(fmt.Sprintf("0081;%x;tuon;", time.Now().Unix())), 0); err != nil {
+	if err := markDownloaded(dst); err != nil {
 		os.Remove(dst)
 		return "", errors.New("couldn't mark the file as downloaded, so it wasn't kept")
 	}

@@ -122,3 +122,6 @@ func ShredAll(path string) error {
 	}
 	return os.RemoveAll(path)
 }
+
+// NoFollow is the open flag that refuses a link (0 where there's none).
+const NoFollow = noFollow

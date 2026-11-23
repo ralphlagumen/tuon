@@ -32,6 +32,8 @@ and versions follow [Semantic Versioning](https://semver.org/).
 - Real names over group nicknames when tagging and in who reacted.
 
 ### Fixed
+- Windows builds of the launcher compile again (the gate's signal handling and saving used Unix-only calls).
+- Saving a file on Linux works (it needed the macOS quarantine mark).
 - A chat you read on your phone (or the web) now shows as read in tuon too, also with read receipts off on the
   phone. Before, it stayed unread until you opened it in tuon.
 - A chat you replied to from tuon no longer comes back unread after you quit and reopen tuon.
@@ -42,6 +44,14 @@ and versions follow [Semantic Versioning](https://semver.org/).
 - `tuon history` missed removals, key changes and 1:1 merges.
 
 ### Security
+- The chat app is sandboxed on Linux too (Landlock and seccomp, set by the launcher before the app starts): it
+  reads only tuon's folders, the attachment folders and system files, writes only tuon's folder and a temp folder
+  of its own, starts no programs, connects only to the launcher's gate (no UDP, DNS or Unix sockets), can't read
+  other programs in `/proc` or type into the terminal, and gets a terminal of its own with escape codes filtered.
+  Links, photos, the clipboard, the file picker and sounds go through the launcher. Kernels without Landlock (before
+  5.13) or its network rules (before 6.7) get what they support and a note at the top. `tuon sandbox-test` runs on
+  Linux; `scripts/linux-test.sh` runs it and the tests in a container.
+- The lock's fingerprint check (vault pin) works on Linux, in `~/.local/share/tuon`.
 - tuon-app ignores `HTTP(S)_PROXY` / `ALL_PROXY` (the header says when one was ignored); `tuon update` runs git, go
   and swiftc without proxy settings.
 - Logout `--wipe`, account switch and relink overwrite the session, `vault.json`, old photo cache and login profile

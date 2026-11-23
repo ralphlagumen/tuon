@@ -27,7 +27,8 @@ var sandboxNote string
 // sandboxTest checks, from inside tuon's sandbox, that secrets can't be
 // read and files can't be planted, while tuon's own folders still work.
 func sandboxTest() int {
-	if runtime.GOOS != "darwin" {
+	mac := runtime.GOOS == "darwin"
+	if !mac && runtime.GOOS != "linux" {
 		fmt.Println("  No sandbox on this system yet.")
 		return 0
 	}
@@ -65,8 +66,14 @@ func sandboxTest() int {
 	}
 	fmt.Println("  inside tuon's sandbox:")
 	check("read ~/.ssh", false, read(filepath.Join(home, ".ssh")))
-	check("read ~/Library/Keychains", false, read(filepath.Join(home, "Library", "Keychains")))
-	check("read Chrome profiles", false, read(filepath.Join(home, "Library", "Application Support", "Google", "Chrome")))
+	if mac {
+		check("read ~/Library/Keychains", false, read(filepath.Join(home, "Library", "Keychains")))
+		check("read Chrome profiles", false, read(filepath.Join(home, "Library", "Application Support", "Google", "Chrome")))
+	} else {
+		check("read ~/.local/share/keyrings (passwords)", false, read(filepath.Join(home, ".local", "share", "keyrings")))
+		check("read Chrome profiles", false, read(filepath.Join(home, ".config", "google-chrome")))
+		check("write ~/.bashrc-tuon-probe (shell startup)", false, write(filepath.Join(home, ".bashrc-tuon-probe")))
+	}
 	check("write ~/.zshrc-tuon-probe (shell startup)", false, write(filepath.Join(home, ".zshrc-tuon-probe")))
 	check("write ~/.local/bin/tuon-probe (tuon's binary)", false, write(filepath.Join(home, ".local", "bin", "tuon-probe")))
 	check("write ~/Desktop/tuon-probe", false, write(filepath.Join(home, "Desktop", "tuon-probe")))
@@ -80,16 +87,23 @@ func sandboxTest() int {
 	check("read ~/.zshrc (dotfiles)", false, read(filepath.Join(home, ".zshrc")))
 	check("read ~/.config (other tools' settings)", false, read(filepath.Join(home, ".config")))
 	check("read ~/.claude", false, read(filepath.Join(home, ".claude")))
-	check("read other apps' containers", false, read(filepath.Join(home, "Library", "Containers")))
-	check("write /private/tmp (shared temp)", false, write("/private/tmp/tuon-probe"))
-	pin := filepath.Join(home, "Library", "Application Support", "tuon", "vault-pin")
+	pin := filepath.Join(home, ".local", "share", "tuon", "vault-pin")
+	if mac {
+		check("read other apps' containers", false, read(filepath.Join(home, "Library", "Containers")))
+		check("write /private/tmp (shared temp)", false, write("/private/tmp/tuon-probe"))
+		check("write other apps' caches (temp C/)", false, write(filepath.Join(filepath.Dir(filepath.Clean(os.TempDir())), "C", "tuon-probe")))
+		pin = filepath.Join(home, "Library", "Application Support", "tuon", "vault-pin")
+	} else {
+		check("write /tmp (shared temp)", false, write("/tmp/tuon-probe"))
+		check("write /dev/shm (shared memory)", false, write("/dev/shm/tuon-probe"))
+		linuxChecks(check, read)
+	}
 	check("read the launcher's vault pin", false, read(pin))
 	check("write the launcher's vault pin", false, write(pin+"-probe"))
-	check("write other apps' caches (temp C/)", false, write(filepath.Join(filepath.Dir(filepath.Clean(os.TempDir())), "C", "tuon-probe")))
 	if base := paths.WorkBase(); base != "" { // the launcher's update and login folders
 		_ = os.MkdirAll(base, 0o700) // refused in here; the launcher makes it
-		check("write ~/Library/Caches/tuon (update, login)", false, write(filepath.Join(base, "sandbox-probe")))
-		check("read ~/Library/Caches/tuon (login browser)", false, read(base))
+		check("write the launcher's cache (update, login)", false, write(filepath.Join(base, "sandbox-probe")))
+		check("read the launcher's cache (login browser)", false, read(base))
 	}
 	// what a bad library could use beyond tuon (audit 14): the SSH agent,
 	// tokens in the environment, local sockets (Docker, other tools)
@@ -110,7 +124,14 @@ func sandboxTest() int {
 	} else {
 		check("network gate running (TUON_PROXY)", true, errors.New("not set"))
 	}
-	run := func(name string, args ...string) error { return exec.Command(name, args...).Run() }
+	run := func(name string, args ...string) error { // started at all = allowed, whatever it then returns
+		err := exec.Command(name, args...).Run()
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
+			return nil
+		}
+		return err
+	}
 	check("start /bin/sh", false, run("/bin/sh", "-c", "true"))
 	if exe, err := os.Executable(); err == nil { // tuon runs unsandboxed: never from in here
 		exe, _ = filepath.EvalSymlinks(exe)
@@ -118,8 +139,12 @@ func sandboxTest() int {
 	}
 	check("start /usr/bin/curl", false, run("/usr/bin/curl", "--version"))
 	check("start a copied program from temp", false, func() error {
-		p := filepath.Join(os.TempDir(), "tuon-probe-true")
-		b, err := os.ReadFile("/usr/bin/true")
+		p := filepath.Join(os.TempDir(), "tuon-probe-copy")
+		self, err := os.Executable() // tuon-app itself: a program that's surely there
+		var b []byte
+		if err == nil {
+			b, err = os.ReadFile(self)
+		}
 		if err == nil {
 			err = os.WriteFile(p, b, 0o700)
 		}
@@ -127,15 +152,19 @@ func sandboxTest() int {
 			return nil // couldn't set up: count as allowed, so the check fails loudly
 		}
 		defer os.Remove(p)
-		return run(p)
+		return run(p, "version")
 	}())
-	check("script Finder (Apple Events)", false, run("/usr/bin/osascript", "-e", `tell application "Finder" to count windows`))
-	check("start fdesetup (FileVault check)", true, run("/usr/bin/fdesetup", "isactive"))
-	check("start pbpaste (paste)", true, run("/usr/bin/pbpaste"))
-	check("start afplay (new-message sound, muted here)", true, run("/usr/bin/afplay", "-v", "0", "/System/Library/Sounds/Pop.aiff"))
-	check("start osascript", false, run("/usr/bin/osascript", "-e", "1"))
+	if mac {
+		check("script Finder (Apple Events)", false, run("/usr/bin/osascript", "-e", `tell application "Finder" to count windows`))
+		check("start fdesetup (FileVault check)", true, run("/usr/bin/fdesetup", "isactive"))
+		check("start pbpaste (paste)", true, run("/usr/bin/pbpaste"))
+		check("start afplay (new-message sound, muted here)", true, run("/usr/bin/afplay", "-v", "0", "/System/Library/Sounds/Pop.aiff"))
+		check("start osascript", false, run("/usr/bin/osascript", "-e", "1"))
+		check("start open", false, run("/usr/bin/open", "-g", "https://example.com"))
+	} else {
+		check("start xdg-open", false, run("/usr/bin/xdg-open", "https://example.com"))
+	}
 	check("share your terminal (could type into your shell)", false, sharesTerminal())
-	check("start open", false, run("/usr/bin/open", "-g", "https://example.com"))
 	if c := opener.Connect(); c != nil {
 		_, err := c.Do(opener.OpClipFile)
 		check("paste files through the launcher", true, err)
@@ -147,6 +176,20 @@ func sandboxTest() int {
 		check("launcher shows a file outside Downloads", false, err)
 		_, err = c.Do(opener.OpSave, filepath.Join(home, ".config", "tuon", "tuon.db"), "x")
 		check("launcher saves a file from outside tuon's temp", false, err)
+		if !mac { // Linux: the clipboard and sounds go through the launcher
+			was, _ := c.Do(opener.OpPaste)
+			_, err = c.Do(opener.OpCopy, "tuon sandbox probe")
+			if err == nil {
+				var rep opener.Reply
+				if rep, err = c.Do(opener.OpPaste); err == nil && rep.Text != "tuon sandbox probe" {
+					err = errors.New("pasted " + strconv.Quote(rep.Text))
+				}
+				_, _ = c.Do(opener.OpCopy, was.Text) // your clipboard back
+			}
+			check("copy and paste through the launcher", true, err)
+			_, err = c.Do(opener.OpSound, "../../../etc/passwd", "100")
+			check("launcher plays a sound given as a path", false, err)
+		}
 		if os.Getenv("TUON_SANDBOXTEST_SAVE") == "1" { // leaves a file in Downloads: only when asked
 			dir := filepath.Join(os.TempDir(), "tuon")
 			_ = os.MkdirAll(dir, 0o700)
@@ -169,6 +212,9 @@ func sandboxTest() int {
 	// to start runs outside the sandbox. The probe is a tiny hidden app
 	// that marks your home folder (which the app can't write) for a few
 	// seconds, then removes the mark.
+	if !mac {
+		return result(fails)
+	}
 	check("start an app through `open`", false, escaped(home, "open", func(app string) error {
 		return run("/usr/bin/open", "-g", "-j", app)
 	}))
@@ -180,6 +226,10 @@ func sandboxTest() int {
 		return run("/usr/bin/osascript", "-l", "JavaScript", "-e",
 			`ObjC.import("CoreServices"); $.LSOpenCFURLRef($.NSURL.fileURLWithPath(`+strconv.Quote(app)+`), null)`)
 	}))
+	return result(fails)
+}
+
+func result(fails int) int {
 	if fails > 0 {
 		fmt.Printf("  %d check(s) failed.\n", fails)
 		return 1
@@ -238,6 +288,9 @@ func unixDial() error {
 	sock := filepath.Join(os.TempDir(), "tuon-probe.sock")
 	os.Remove(sock)
 	l, err := net.Listen("unix", sock)
+	if errors.Is(err, os.ErrPermission) {
+		return err // no Unix sockets at all (Linux's filter)
+	}
 	if err != nil {
 		return nil // couldn't set up: count as allowed, so the check fails loudly
 	}

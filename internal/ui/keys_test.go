@@ -12,7 +12,9 @@ import (
 	"github.com/ralph/tuon/internal/connector"
 )
 
-func (f *fakeConn) ContactKeys(context.Context, string) (connector.KeySet, error) { return f.keySet, nil }
+func (f *fakeConn) ContactKeys(context.Context, string) (connector.KeySet, error) {
+	return f.keySet, nil
+}
 
 func keyOf(b byte) []byte { return bytes.Repeat([]byte{b}, 32) }
 

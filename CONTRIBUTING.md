@@ -122,4 +122,4 @@ Open an issue, or start a draft pull request early and ask there. Showing a roug
 
 ## Before you push
 
-Run `./scripts/check.sh`: module checksums, build, vet, tests and known vulnerabilities (tests and govulncheck in the sandbox on macOS). It fails if the release signing key is loaded in your SSH agent. There's no hosted CI, so this is the check.
+Run `./scripts/check.sh`: module checksums, build, vet, tests and known vulnerabilities (tests and govulncheck in the sandbox on macOS). It fails if the release signing key is loaded in your SSH agent. There's no hosted CI, so this is the check. After changes to the sandbox, the launcher or anything Linux-specific, also run `./scripts/linux-test.sh` (needs Docker; OrbStack works): it runs the tests and `tuon sandbox-test` on Linux in a throwaway container.

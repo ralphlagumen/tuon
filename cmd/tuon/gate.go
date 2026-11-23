@@ -102,7 +102,9 @@ func startGate() (*gate, error) {
 		case s := <-sigs:
 			gt.stop()
 			signal.Reset(s)
-			_ = syscall.Kill(os.Getpid(), s.(syscall.Signal))
+			if self, err := os.FindProcess(os.Getpid()); err == nil {
+				_ = self.Signal(s) // (builds on Windows too, where the gate isn't used)
+			}
 		case <-gt.done:
 			signal.Stop(sigs)
 		}

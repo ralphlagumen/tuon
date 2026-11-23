@@ -98,4 +98,5 @@ func storedDevices(ctx context.Context, db *sql.DB, ourJID string, user waTypes.
 	}
 	return out
 }
+
 var _ connector.KeyLister = (*Conn)(nil)

@@ -52,7 +52,7 @@ This builds `tuon`, its chat app `tuon-app` and its small Touch ID helper (`tuon
 
 **Updating:** run `tuon update`. It downloads tuon fresh from GitHub into a temporary folder, installs the newest release tag signed by tuon's maintainer and skips anything unsigned, shows what changed, and asks before building if the update changes tuon's dependencies. Restart tuon afterwards if it was open. Coming from 0.3.0, run `tuon update` twice: the first run installs the new launcher, the second adds the chat app (`tuon-app`) next to it.
 
-**Linux:** `./install.sh` works the same, minus Ghostty. For photos, use kitty, Ghostty or WezTerm. For copy and paste, install `wl-clipboard` (Wayland) or `xclip` (X11).
+**Linux:** `./install.sh` works the same, minus Ghostty. For photos, use kitty, Ghostty or WezTerm. For copy and paste, install `wl-clipboard` (Wayland) or `xclip` (X11); for attaching any file, `zenity` or `kdialog`. The chat app runs in a sandbox here too (Landlock, Linux 5.13 or later; 6.7 or later to hold it to Meta's servers).
 
 **Windows:** build it, then run it in Windows Terminal:
 
