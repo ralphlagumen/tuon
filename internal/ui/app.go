@@ -156,9 +156,16 @@ type Model struct {
 	albumWait  []connector.Media // photos to open in the viewer once all have loaded
 	gallery    []connector.Media // photos the full-screen view flips through
 
-	status    string
-	statusErr bool
-	toast     string
+	status string
+	// startup loading screen (loading.go)
+	loading    bool
+	loadStart  time.Time
+	loadFailed string
+	syncDone   map[string]bool
+	syncErr    map[string]string
+	syncChats  int
+	statusErr  bool
+	toast      string
 
 	loggedOut bool      // Messenger rejected the login: main runs the login again
 	started   time.Time // messages older than this never chime
@@ -300,7 +307,11 @@ func (m Model) Cleanup() {
 func draftText(v string) string { return strings.TrimSpace(tokenRe.ReplaceAllString(v, "")) }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(func() tea.Msg { return startedMsg{m.conn.Start(m.ctx)} }, pruneLater(), idleLater())
+	cmds := []tea.Cmd{func() tea.Msg { return startedMsg{m.conn.Start(m.ctx)} }, pruneLater(), idleLater()}
+	if m.loading {
+		cmds = append(cmds, loadLater())
+	}
+	return tea.Batch(cmds...)
 }
 
 // KeepMessages: the newest messages kept per chat (older ones load again
@@ -329,6 +340,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		if msg.err != nil {
+			m.loadFailed = msg.err.Error()
 			m.status, m.statusErr = "login failed: "+msg.err.Error()+" — update ~/.config/tuon/cookies.txt", true
 		} else {
 			m.status, m.statusErr = "syncing…", false
@@ -529,16 +541,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.toast = ""
 		return m, nil
 
+	case loadTick: // redraw the loading screen (its dots and timer)
+		if m.loading {
+			return m, loadLater()
+		}
+		return m, nil
+
 	case tea.KeyMsg:
 		if m.locked {
 			return m.onLockedKey(msg)
 		}
 		m.lastInput = time.Now()
+		if m.loading {
+			return m.onLoadingKey(msg)
+		}
 		m.sel = textSel{} // typing or moving drops the highlight
 		return m.onKey(msg)
 
 	case tea.MouseMsg:
-		if m.locked {
+		if m.locked || m.loading {
 			return m, nil
 		}
 		m.lastInput = time.Now()
@@ -626,6 +647,8 @@ func (m *Model) applyEvents(evts []any) tea.Cmd {
 			}
 			m.keysWarn = fmt.Sprintf("Messages from %s keep failing to decrypt live (they still arrive through your backup). If this keeps up, quit and run `tuon relink`.", firstName(who))
 			m.Warn(m.keysWarn)
+		case connector.SyncEvent:
+			m.onSync(e)
 		case connector.StatusEvent:
 			m.status, m.statusErr = e.Text, e.Err != nil
 			if e.Err != nil {

@@ -174,6 +174,9 @@ func (c *Conn) status(text string, err error) {
 		}
 	}
 	c.emit(connector.StatusEvent{Text: text, Err: err})
+	if text == "encrypted chats off" { // the step is over, just without encrypted chats
+		c.emit(connector.SyncEvent{Part: connector.SyncEncrypted, Done: true, Err: err})
+	}
 }
 
 func (c *Conn) Start(ctx context.Context) error {
@@ -245,6 +248,7 @@ func (c *Conn) onMeta(ctx context.Context, raw any) {
 		c.handleTable(evt)
 	case *messagix.ConnectedEvent:
 		c.status("connected", nil)
+		c.emit(connector.SyncEvent{Part: connector.SyncMessenger, Done: true, Chats: int(c.threadsSeen.Load())})
 		c.e2eeOnce.Do(func() { go c.connectE2EE() })
 		c.fetchOnce.Do(func() { go c.fetchMoreThreads() })
 	case *messagix.ReconnectedEvent:
@@ -277,6 +281,7 @@ func (c *Conn) fetchMoreThreads() {
 			}
 			pages++
 			c.handleTable(tbl)
+			c.emit(connector.SyncEvent{Part: connector.SyncChats, Chats: int(c.threadsSeen.Load())})
 			select { // the chats come over the connection
 			case <-c.ctx.Done():
 				return
@@ -292,6 +297,7 @@ func (c *Conn) fetchMoreThreads() {
 		// counts only: how far the chat list got, and why it stopped
 		c.log.Warn().Int64("group", group).Int("pages", pages).Int("chats", got).Str("stop", why).Msg("chat list paging")
 	}
+	c.emit(connector.SyncEvent{Part: connector.SyncChats, Done: true, Chats: int(c.threadsSeen.Load())})
 }
 
 // unread: Messenger's read mark is behind the chat's last activity, and
@@ -640,6 +646,7 @@ func (c *Conn) onWA(raw any) {
 		return
 	case *events.Connected:
 		c.status("connected", nil)
+		c.emit(connector.SyncEvent{Part: connector.SyncEncrypted, Done: true})
 		return
 	case *events.UndecryptableMessage:
 		c.onUndecryptable(raw.(*events.UndecryptableMessage))

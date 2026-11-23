@@ -6,6 +6,10 @@ and versions follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- A loading screen at startup: the chat screen shows blurred behind a floating card with a progress bar and what it's syncing (Messenger, encrypted chats, the chat list with a count)
+  and takes no input but `q` until all three are done, so you don't read or answer a half-synced list. If it fails
+  or takes over 45 seconds, `enter` opens your saved chats anyway. Later reconnects don't block; the header shows
+  them.
 - Drag over a message or the draft to select and copy text; double-click takes a word, triple-click a line.
 - Group chats show ⁂ after their name; encrypted chats show 🔒 in the list and header.
 - `:hush` hides a chat from every view (muted, out of Unread and folders); `:hushed` (`:H`) lists them, `:unhush`

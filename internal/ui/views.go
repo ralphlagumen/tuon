@@ -69,6 +69,8 @@ func (m Model) View() string {
 	switch {
 	case m.locked:
 		lines = m.lockView() // nothing of the chats shows while locked
+	case m.loading:
+		lines = m.loadingView() // startup: nothing to use until synced
 	case m.mode == modeHelp:
 		lines = m.helpView()
 	case m.mode == modeImage:

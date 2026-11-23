@@ -197,6 +197,7 @@ func run() error {
 	defer conn.Close()
 
 	model := ui.New(ctx, st, conn, "messenger")
+	model.WaitForSync() // a loading screen until Messenger, encrypted chats and the chat list are in
 	model.Warn(diskWarning())
 	model.Warn(proxyNote)
 	if sandboxNote != "" {

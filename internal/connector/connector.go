@@ -119,9 +119,25 @@ func (a Attachment) IsImage() bool {
 	return len(a.Mime) > 6 && a.Mime[:6] == "image/" && a.Mime != "image/gif"
 }
 
+// Startup steps (SyncEvent.Part).
+const (
+	SyncMessenger = "messenger" // connected to Messenger
+	SyncEncrypted = "encrypted" // encrypted chats connected (or unavailable)
+	SyncChats     = "chats"     // the whole chat list fetched
+)
+
 // Events sent on Connector.Events().
 type (
 	ChatEvent struct{ Chat Chat }
+	// SyncEvent: a startup step finished (Done) or moved on. Part is
+	// SyncMessenger, SyncEncrypted or SyncChats; Chats counts the chats
+	// seen so far; Err says a step ended without working (it's still done).
+	SyncEvent struct {
+		Part  string
+		Done  bool
+		Chats int
+		Err   error
+	}
 	// ReadEvent: you read ChatID up to UpTo on another device (your phone,
 	// the web). Comes even with read receipts off: those only hide it from
 	// the other people.

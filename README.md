@@ -82,6 +82,8 @@ When Messenger logs you out, tuon asks you to log in again right away. `tuon log
 
 The chat list is on the left and the open chat on the right. Press `?` in Tuon for every key.
 
+When Tuon starts it syncs first: the screen shows blurred behind a small card with a progress bar for Messenger, encrypted chats and the chat list coming in (about 15 seconds), and the chats appear when all three are done. If it can't connect or takes too long, `enter` opens your saved chats anyway.
+
 <details open>
 <summary><b>Chat list</b></summary>
 
