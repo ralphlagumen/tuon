@@ -58,6 +58,11 @@ and versions follow [Semantic Versioning](https://semver.org/).
   when more than 1 MB goes up within 10 minutes while you've been away from the keyboard for 5+ minutes, or more
   than 200 MB in one run. Each run's upload/download totals are logged, also when the terminal is closed or tuon is
   killed, plus a line every 30 minutes.
+- The launcher filters the app's output before your terminal sees it: links (OSC 8), titles, notifications, iTerm
+  file downloads, kitty images from files, clipboard reads and DCS strings are dropped; drawing codes and what tuon
+  uses pass. Dropped codes are counted in `net.log`.
+- Tests that need a pseudo-terminal (the relay tests) and the launcher's dependency check ran as "skipped" inside the
+  test sandbox; both run again.
 - Scan 2026-11-23: govulncheck finds nothing tuon calls. One module-level advisory, GO-2026-5932
   (`golang.org/x/crypto/openpgp`, unmaintained): tuon doesn't use that package; the fix is only in an untagged
   x/crypto build, so tuon waits for the next tagged release.

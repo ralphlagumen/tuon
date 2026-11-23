@@ -58,7 +58,7 @@ func main() {
 	tmp := real(os.TempDir())
 	profile := sandbox.DevProfile(real(home), tmp, real(repo), real(gopath), real(cache), net, live)
 
-	env := []string{"GOCACHE=" + cache, "GOFLAGS=-mod=readonly", "GOTELEMETRY=off", "GOPROXY=off", "TUON_DEVSANDBOX=" + mode(net, live)}
+	env := []string{"GOCACHE=" + cache, "GOFLAGS=-mod=readonly -buildvcs=false", "GOTELEMETRY=off", "GOPROXY=off", "TUON_DEVSANDBOX=" + mode(net, live)}
 	if net {
 		env[3] = "GOPROXY=" + goEnv("GOPROXY")
 	}

@@ -21,6 +21,10 @@ import (
 // it). Upload while you've been away is what a quiet theft looks like.
 var lastInput atomic.Int64
 
+// termDropped: escape codes from the app the terminal filter dropped
+// (internal/termfilter); tuon itself sends none of those.
+var termDropped atomic.Int64
+
 // gate is the running network gate for one launch: the app reaches Meta
 // only through it (internal/netgate). Its log is in ~/Library/Caches/tuon,
 // which the sandboxed app can neither read nor write.
@@ -120,9 +124,9 @@ func (gt *gate) stopNow() {
 	gt.w.Close()
 	gt.events.Close()
 	refused := gt.g.Refused()
-	gt.log(fmt.Sprintf("run %s–%s %s; allowed: %s; refused: %s",
+	gt.log(fmt.Sprintf("run %s–%s %s; allowed: %s; refused: %s; terminal codes dropped: %d",
 		gt.start.Format(time.RFC3339), time.Now().Format("15:04:05"), gt.traffic(),
-		strings.Join(gt.g.AllowedHosts(), ", "), strings.Join(refused, ", ")))
+		strings.Join(gt.g.AllowedHosts(), ", "), strings.Join(refused, ", "), termDropped.Load()))
 	gt.mu.Lock()
 	alarms := gt.alarms
 	gt.mu.Unlock()

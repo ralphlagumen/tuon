@@ -185,3 +185,35 @@ func TestRelayEscAmidScrollReports(t *testing.T) {
 		})
 	}
 }
+
+// TestRelayFiltersOutput: what the app draws reaches your terminal, but a
+// code that reaches past the sandbox (a link, a title, a kitty file read)
+// doesn't (internal/termfilter).
+func TestRelayFiltersOutput(t *testing.T) {
+	ctl, app, err := openPty()
+	if err != nil {
+		t.Skip("no pty:", err)
+	}
+	if _, err := term.MakeRaw(int(app.Fd())); err != nil {
+		t.Fatal(err)
+	}
+	inR, _, _ := os.Pipe()
+	outR, outW, _ := os.Pipe()
+	oldStdout := os.Stdout
+	os.Stdout = outW
+	defer func() { os.Stdout = oldStdout }()
+	go relay(int(inR.Fd()), int(ctl.Fd()), make(chan os.Signal), func() {}, make(chan error, 1))
+
+	_, _ = app.Write([]byte("\x1b[1mhi\x1b[0m\x1b]8;;ssh://evil\x07link\x1b]8;;\x07\x1b]0;fake\x07\x1b_Ga=T,t=f;L2V0Yy9wYXNzd2Q=\x1b\\\x1b]11;?\x07END"))
+	var got []byte
+	buf := make([]byte, 4096)
+	deadline := time.Now().Add(2 * time.Second)
+	for !strings.Contains(string(got), "END") && time.Now().Before(deadline) {
+		_ = outR.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+		n, _ := outR.Read(buf)
+		got = append(got, buf[:n]...)
+	}
+	if want := "\x1b[1mhi\x1b[0mlink\x1b]11;?\x07END"; string(got) != want {
+		t.Fatalf("terminal got %q, want %q", got, want)
+	}
+}

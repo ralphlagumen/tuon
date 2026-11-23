@@ -16,6 +16,7 @@ import (
 	"github.com/ralph/tuon/internal/paths"
 	"github.com/ralph/tuon/internal/sandbox"
 	"github.com/ralph/tuon/internal/seq"
+	"github.com/ralph/tuon/internal/termfilter"
 )
 
 // The chat app gets a terminal of its own (a pseudo-terminal), and the
@@ -139,6 +140,8 @@ func relay(in, ctl int, winch chan os.Signal, resize func(), done chan error) {
 	defer func() { close(stop); <-keysDone }()
 
 	buf := make([]byte, 32<<10)
+	var tf termfilter.Filter // escape codes that reach past the sandbox are dropped
+	defer func() { termDropped.Add(int64(tf.Dropped)) }()
 	exited := false
 	for {
 		select {
@@ -165,7 +168,7 @@ func relay(in, ctl int, winch chan os.Signal, resize func(), done chan error) {
 		if fds[0].Revents&(unix.POLLIN|unix.POLLHUP|unix.POLLERR) != 0 {
 			m, err := unix.Read(ctl, buf)
 			if m > 0 {
-				writeAll(out, buf[:m])
+				writeAll(out, tf.Filter(buf[:m]))
 			}
 			if (err != nil && err != unix.EAGAIN) || m == 0 {
 				if exited {

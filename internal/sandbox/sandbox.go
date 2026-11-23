@@ -257,7 +257,8 @@ func DevProfile(home, tmp, repo, gopath, cache string, net, live bool) string {
 	for _, p := range write {
 		b.WriteString("  (subpath " + q(p) + ")\n")
 	}
-	b.WriteString(`  (regex #"^/dev/(null|zero|tty|ttys[0-9]+|dtracehelper|random|urandom)$")` + "\n")
+	// /dev/ptmx: the relay tests open a pseudo-terminal of their own
+	b.WriteString(`  (regex #"^/dev/(null|zero|tty|ttys[0-9]+|ptmx|dtracehelper|random|urandom)$")` + "\n")
 	b.WriteString(")))\n")
 	b.WriteString("(deny appleevent-send)\n")
 	b.WriteString("(deny network-outbound (remote unix-socket))\n")
