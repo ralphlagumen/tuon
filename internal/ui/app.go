@@ -177,7 +177,9 @@ type Model struct {
 
 // Bubble Tea messages.
 type (
-	EventsMsg  []any
+	EventsMsg []any
+	// WarnMsg adds a lasting header warning while tuon runs.
+	WarnMsg    string
 	startedMsg struct{ err error }
 	mediaMsg   struct {
 		ref string
@@ -345,6 +347,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case EventsMsg:
 		return m, m.applyEvents(msg)
+
+	case WarnMsg:
+		m.Warn(termSafe(string(msg)))
+		return m, nil
 
 	case tea.BlurMsg: // the terminal window went to the background
 		m.away = true

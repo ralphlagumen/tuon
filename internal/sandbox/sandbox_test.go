@@ -6,7 +6,7 @@ import (
 )
 
 func TestProfile(t *testing.T) {
-	p := Profile(`/Users/a "b"`, "/private/var/folders/x/y/T", "/Users/a/.local/bin/tuon-app")
+	p := Profile(`/Users/a "b"`, "/private/var/folders/x/y/T", "/Users/a/.local/bin/tuon-app", 0)
 	for _, want := range []string{`(allow default)`, `/Users/a \"b\"/.ssh`, `Library/Keychains`, `(deny file-write* (require-not`, `/Users/a \"b\"/.config/tuon`, `/private/var/folders/x/y"`, `(deny process-exec*)`, `/usr/bin/afplay`, `/Users/a/.local/bin/tuon-keyhelper`, `(deny appleevent-send)`, `.claude`} {
 		if !strings.Contains(p, want) {
 			t.Errorf("profile missing %q", want)
@@ -25,6 +25,20 @@ func TestProfile(t *testing.T) {
 	}
 	if strings.Contains(p, "(remote ip") {
 		t.Error("the profile shouldn't limit the internet yet (Messenger needs it)")
+	}
+}
+
+// TestProfileGated: with the launcher's gate, the only way out is its port:
+// no other host, IP or port, no DNS socket (a lookup can carry data out).
+func TestProfileGated(t *testing.T) {
+	p := Profile("/Users/a", "/private/var/folders/x/y/T", "/Users/a/.local/bin/tuon-app", 52123)
+	for _, want := range []string{"(deny network-outbound (remote ip))", `(allow network-outbound (remote ip "localhost:52123"))`, "(deny network-outbound (remote unix-socket))"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("gated profile missing %q", want)
+		}
+	}
+	if strings.Contains(p, "mDNSResponder") {
+		t.Error("gated profile must not allow DNS lookups")
 	}
 }
 

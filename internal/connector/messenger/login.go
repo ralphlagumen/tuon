@@ -31,7 +31,7 @@ type Field struct {
 // through ask. The password goes only to Meta; what comes back is a
 // session, which the caller saves.
 func PasswordLogin(ctx context.Context, log zerolog.Logger, ask func(Field) (string, error), say func(string)) (auth.Creds, error) {
-	cli := messagix.NewClient(&cookies.Cookies{Platform: types.MessengerLiteIOS}, log, &messagix.Config{})
+	cli := messagix.NewClient(&cookies.Cookies{Platform: types.MessengerLiteIOS}, log, &messagix.Config{ClientSettings: clientSettings()})
 	input := map[string]string{}
 	for i := 0; i < 25; i++ {
 		step, ck, err := cli.MessengerLite.DoLoginSteps(ctx, input)

@@ -91,9 +91,15 @@ func findApp() (string, error) {
 
 // launch runs the chat app until it's done and returns its exit code.
 func launch(app string, args []string) int {
-	if c, why := sandbox.Command(app, args); c == nil {
+	if c, why := sandbox.Command(app, args, 0); c == nil {
 		return runPlain(app, args, why)
 	}
+	gt, err := startGate()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "tuon: network gate:", err)
+		return 1
+	}
+	defer gt.stop()
 	var key []byte   // the unlocked vault's key, for the app
 	var login []byte // cookies from a browser login, for the app
 	for {
@@ -105,8 +111,9 @@ func launch(app string, args []string) int {
 			}
 			key = v.Handoff()
 		}
-		cmd, _ := sandbox.Command(app, args)
-		code, err := runWith(cmd, key, login)
+		cmd, _ := sandbox.Command(app, args, gt.port)
+		cmd.Env = append(cmd.Env, gt.env()...)
+		code, err := runWith(cmd, key, login, gt.events)
 		clear(login)
 		login = nil
 		if err != nil {
@@ -172,7 +179,7 @@ func runPlain(app string, args []string, why string) int {
 
 // runWith starts the sandboxed app with the key on fd 3 and a login on
 // fd 4 (each only when there is one). Pipes, never files or arguments.
-func runWith(cmd *exec.Cmd, key, login []byte) (int, error) {
+func runWith(cmd *exec.Cmd, key, login []byte, gateEvents *os.File) (int, error) {
 	pipe := func(b []byte, env string) (*os.File, error) {
 		if b == nil {
 			return os.Open(os.DevNull)
@@ -213,7 +220,7 @@ func runWith(cmd *exec.Cmd, key, login []byte) (int, error) {
 		return 0, err
 	}
 	cmd.Env = append(cmd.Env, opener.Env+"=5")
-	cmd.ExtraFiles = []*os.File{k, l, reqW, repR} // fd 3, 4, 5, 6 in the app
+	cmd.ExtraFiles = []*os.File{k, l, reqW, repR, gateEvents} // fd 3, 4, 5, 6, 7 in the app
 	done := make(chan struct{})
 	go func() {
 		opener.Serve(reqR, repW, handleOpen)

@@ -45,6 +45,9 @@ and versions follow [Semantic Versioning](https://semver.org/).
 - `./scripts/check.sh` runs tests and govulncheck in a sandbox (`scripts/devsandbox`), since they run dependency
   code: no home folder, SSH agent, sockets or repo writes, and tests get no internet. It fails if the release signing
   key is loaded in the SSH agent.
+- The sandboxed app can only reach Meta's servers: the launcher runs a gate (a localhost proxy) that lets through only
+  Meta's hosts on https, and the sandbox refuses every other connection, including DNS lookups. Refusals go to
+  `~/Library/Caches/tuon/net.log`, the header, and a note when tuon quits. `tuon sandbox-test` checks it (40 checks).
 - Scan 2026-11-23: govulncheck finds nothing tuon calls. One module-level advisory, GO-2026-5932
   (`golang.org/x/crypto/openpgp`, unmaintained): tuon doesn't use that package; the fix is only in an untagged
   x/crypto build, so tuon waits for the next tagged release.

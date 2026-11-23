@@ -195,7 +195,7 @@ func (c *Conn) Start(ctx context.Context) error {
 		return fmt.Errorf("missing cookies: %v", missing)
 	}
 
-	c.cli = messagix.NewClient(ck, c.log, &messagix.Config{})
+	c.cli = messagix.NewClient(ck, c.log, &messagix.Config{ClientSettings: clientSettings()})
 	keepCookiesOnRedirect(c.cli.GetHTTP().GetHTTPClient())
 	user, tbl, err := c.cli.LoadMessagesPage(c.ctx)
 	if err != nil {
@@ -616,6 +616,12 @@ func (c *Conn) connectE2EE() {
 	if err != nil {
 		c.status("encrypted chats off", err)
 		return
+	}
+	if gateURL != "" { // websocket and media through the launcher's gate
+		if err := wa.SetProxyAddress(gateURL); err != nil {
+			c.status("encrypted chats off", err)
+			return
+		}
 	}
 	wa.AddEventHandler(c.onWA)
 	if err := wa.Connect(); err != nil {

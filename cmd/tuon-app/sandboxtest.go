@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ralph/tuon/internal/netgate"
 	"github.com/ralph/tuon/internal/opener"
 	"github.com/ralph/tuon/internal/paths"
 	"github.com/ralph/tuon/internal/sandbox"
@@ -84,8 +87,20 @@ func sandboxTest() int {
 	check("SSH agent passed in (SSH_AUTH_SOCK)", false, envSet("SSH_AUTH_SOCK"))
 	check("other secrets in the environment (tokens)", false, secretEnv())
 	check("connect to a Unix socket (SSH agent, Docker)", false, unixDial())
-	_, err := net.LookupHost("www.facebook.com")
-	check("look up www.facebook.com (name lookups)", true, err)
+	// the network: only Meta, only through the launcher's gate
+	if gw := os.Getenv(netgate.Env); gw != "" {
+		_, err := net.LookupHost("example.com")
+		check("look up a name directly (could carry data out)", false, err)
+		c, err := net.DialTimeout("tcp", "1.1.1.1:443", 3*time.Second)
+		if err == nil {
+			c.Close()
+		}
+		check("connect to the internet directly (1.1.1.1)", false, err)
+		check("through the gate: example.com", false, viaGate(gw, "example.com:443"))
+		check("through the gate: www.facebook.com", true, viaGate(gw, "www.facebook.com:443"))
+	} else {
+		check("network gate running (TUON_PROXY)", true, errors.New("not set"))
+	}
 	run := func(name string, args ...string) error { return exec.Command(name, args...).Run() }
 	check("start /bin/sh", false, run("/bin/sh", "-c", "true"))
 	if exe, err := os.Executable(); err == nil { // tuon runs unsandboxed: never from in here
@@ -145,6 +160,25 @@ func sandboxTest() int {
 	}
 	fmt.Println("  All checks passed.")
 	return 0
+}
+
+// viaGate asks the gate to CONNECT to target: nil when it agrees.
+func viaGate(gw, target string) error {
+	c, err := net.DialTimeout("tcp", gw, 3*time.Second)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	_ = c.SetDeadline(time.Now().Add(20 * time.Second))
+	fmt.Fprintf(c, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", target, target)
+	resp, err := http.ReadResponse(bufio.NewReader(c), nil)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode != 200 {
+		return errors.New(resp.Status)
+	}
+	return nil
 }
 
 // envSet: nil (allowed) when the variable reached the app.

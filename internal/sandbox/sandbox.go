@@ -21,7 +21,10 @@
 // SSH agent socket or tokens, and it can't connect to Unix sockets (the
 // SSH agent, Docker), except the one macOS needs for name lookups.
 //
-// Network stays open (Messenger needs it). Elsewhere this is a no-op for
+// Network: with a gate port (internal/netgate, run by the launcher) the app
+// may connect only to that port on localhost, so everything it sends goes
+// through the gate, which lets only Meta's servers through. No DNS either:
+// a lookup can carry data out in the name. Elsewhere this is a no-op for
 // now. TUON_NO_SANDBOX=1 turns it off for troubleshooting.
 package sandbox
 
@@ -135,8 +138,9 @@ func Active() bool { return os.Getenv(envMark) == "1" }
 func Disabled() bool { return os.Getenv("TUON_NO_SANDBOX") != "" }
 
 // Profile is the macOS sandbox profile for a home folder, temp folder and
-// the chat app (exe, tuon-app, with the Touch ID helper next to it).
-func Profile(home, tmp, exe string) string {
+// the chat app (exe, tuon-app, with the Touch ID helper next to it). With
+// gatePort > 0 the app's only way out is the launcher's gate on that port.
+func Profile(home, tmp, exe string, gatePort int) string {
 	q := func(p string) string { return fmt.Sprintf("%q", p) } // SBPL strings use Go-compatible escapes
 	var b strings.Builder
 	b.WriteString("(version 1)\n(allow default)\n")
@@ -169,9 +173,14 @@ func Profile(home, tmp, exe string) string {
 	b.WriteString(")\n")
 	// no scripting other apps (Terminal, Finder, System Events…)
 	b.WriteString("(deny appleevent-send)\n")
-	// no Unix sockets (SSH agent, Docker, local tools) but name lookups
+	// no Unix sockets (SSH agent, Docker, local tools)
 	b.WriteString("(deny network-outbound (remote unix-socket))\n")
-	b.WriteString("(allow network-outbound (remote unix-socket (path-literal " + q(dnsSocket) + ")))\n")
+	if gatePort > 0 {
+		// only the gate: no other host, IP, port or DNS lookup
+		fmt.Fprintf(&b, "(deny network-outbound (remote ip))\n(allow network-outbound (remote ip \"localhost:%d\"))\n", gatePort)
+	} else {
+		b.WriteString("(allow network-outbound (remote unix-socket (path-literal " + q(dnsSocket) + ")))\n")
+	}
 	return b.String()
 }
 

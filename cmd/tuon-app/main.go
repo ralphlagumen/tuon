@@ -22,6 +22,7 @@ import (
 
 	"github.com/ralph/tuon/internal/auth"
 	"github.com/ralph/tuon/internal/connector/messenger"
+	"github.com/ralph/tuon/internal/netgate"
 	"github.com/ralph/tuon/internal/sandbox"
 	"github.com/ralph/tuon/internal/store"
 	"github.com/ralph/tuon/internal/ui"
@@ -33,9 +34,12 @@ func main() {
 	debug.SetGCPercent(50)
 	debug.SetMemoryLimit(96 << 20)
 	args := os.Args[1:]
-	privateFiles()                           // everything tuon writes is readable only by you
-	proxyNote = proxyWarning(dropProxyEnv()) // before any connection: Go reads these once
-	dumpStacksOnSignal()                     // kill -USR1: goroutine stacks to tuon.log (freeze diagnosis)
+	privateFiles()                                                    // everything tuon writes is readable only by you
+	proxyNote = proxyWarning(dropProxyEnv())                          // before any connection: Go reads these once
+	if err := messenger.SetGate(os.Getenv(netgate.Env)); err != nil { // the launcher's gate: Meta only
+		fail(err)
+	}
+	dumpStacksOnSignal() // kill -USR1: goroutine stacks to tuon.log (freeze diagnosis)
 	sandboxNote = os.Getenv(sandbox.NoteEnv)
 	if runtime.GOOS == "darwin" && !sandbox.Active() && sandboxNote == "" {
 		sandboxNote = "started without the launcher: run tuon, not tuon-app"
@@ -206,6 +210,8 @@ func run() error {
 		model.SetLock(touch, vlt.CheckPassphrase, 10*time.Minute)
 	}
 	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithReportFocus(), tea.WithContext(ctx), tea.WithInput(appInput()))
+
+	watchGate(p, log)
 
 	// Pass connector events to the UI. It sleeps until something arrives,
 	// then gathers whatever else comes within 30ms into one redraw, so a big

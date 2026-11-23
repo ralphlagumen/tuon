@@ -11,7 +11,7 @@ const sandboxExec = "/usr/bin/sandbox-exec"
 // launcher to run as a child. It returns nil and the reason when there's
 // no sandbox to use. The launcher is never sandboxed itself, so an
 // inherited TUON_SANDBOXED (see ClearMark) can't switch this off.
-func Command(app string, args []string) (*exec.Cmd, string) {
+func Command(app string, args []string, gatePort int) (*exec.Cmd, string) {
 	// (the environment is cut down to AppEnv: no SSH agent, no tokens)
 	if Disabled() {
 		return nil, "sandbox off (TUON_NO_SANDBOX)"
@@ -23,7 +23,7 @@ func Command(app string, args []string) (*exec.Cmd, string) {
 	if err != nil {
 		return nil, "sandbox unavailable: " + err.Error()
 	}
-	profile := Profile(realDir(home), realDir(os.TempDir()), app)
+	profile := Profile(realDir(home), realDir(os.TempDir()), app, gatePort)
 	cmd := exec.Command(sandboxExec, append([]string{"-p", profile, app}, args...)...)
 	cmd.Env = append(AppEnv(os.Environ()), envMark+"=1")
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
