@@ -30,8 +30,12 @@ const (
 	OpPhotos    = "photos"     // Args: photo files in $TMPDIR/tuon
 	OpReveal    = "reveal"     // Args[0]: a file in ~/Downloads
 	OpClipImage = "clip-image" // reply Data: PNG bytes on the clipboard
-	OpClipFile  = "clip-file"  // reply Text: path of a file copied in Finder
+	OpClipFile  = "clip-file"  // reply Text: name, Data: contents of a file copied in Finder
+	OpPickFile  = "pick-file"  // reply Text: name, Data: contents of the file you pick in the Open dialog
 )
+
+// MaxFile: the largest file the launcher hands over (Messenger's limit).
+const MaxFile = 25 << 20
 
 // Request is one ask from the app.
 type Request struct {

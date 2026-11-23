@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"io"
 	"net/url"
 	"os"
 	"os/exec"
@@ -21,7 +22,11 @@ import (
 // saved files are only shown in Finder.
 func handleOpen(req opener.Request) opener.Reply {
 	fail := func(err error) opener.Reply { return opener.Reply{Err: err.Error()} }
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	wait := 8 * time.Second
+	if req.Op == opener.OpPickFile {
+		wait = 10 * time.Minute // you're choosing in the dialog
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), wait)
 	defer cancel()
 	switch req.Op {
 	case opener.OpURL:
@@ -75,10 +80,50 @@ func handleOpen(req opener.Request) opener.Reply {
 		}
 		return opener.Reply{Data: b}
 	case opener.OpClipFile:
+		// the file you copied in Finder: the app can't read most of your
+		// home folder, so the launcher hands over its contents
 		out, _ := exec.CommandContext(ctx, "/usr/bin/osascript", "-e", "POSIX path of (the clipboard as «class furl»)").Output()
-		return opener.Reply{Text: strings.TrimSpace(string(out))}
+		p := strings.TrimSpace(string(out))
+		if _, err := os.Stat(p); p == "" || errors.Is(err, os.ErrNotExist) {
+			return opener.Reply{} // no file copied (text on the clipboard reads as a made-up path)
+		}
+		return handFile(p)
+	case opener.OpPickFile:
+		// only a file you pick in the launcher's own Open dialog: the app
+		// (which may run a bad library) can't choose what gets read
+		out, err := exec.CommandContext(ctx, "/usr/bin/osascript",
+			"-e", "tell me to activate",
+			"-e", `POSIX path of (choose file with prompt "Attach a file to send in tuon")`).Output()
+		if err != nil {
+			return fail(errors.New("no file picked"))
+		}
+		return handFile(strings.TrimSpace(string(out)))
 	}
 	return fail(errors.New("unknown request"))
+}
+
+// handFile reads a file you chose (copied or picked) for the app: a
+// regular file, at most opener.MaxFile.
+func handFile(p string) opener.Reply {
+	f, err := os.Open(p)
+	if err != nil {
+		return opener.Reply{Err: "can't read " + filepath.Base(p)}
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	switch {
+	case err != nil || st.IsDir():
+		return opener.Reply{Err: filepath.Base(p) + " is a folder"}
+	case !st.Mode().IsRegular():
+		return opener.Reply{Err: filepath.Base(p) + " isn't a file"}
+	case st.Size() > opener.MaxFile:
+		return opener.Reply{Err: filepath.Base(p) + " is over 25 MB"}
+	}
+	data, err := io.ReadAll(io.LimitReader(f, opener.MaxFile+1))
+	if err != nil || len(data) > opener.MaxFile {
+		return opener.Reply{Err: "can't read " + filepath.Base(p)}
+	}
+	return opener.Reply{Text: filepath.Base(p), Data: data}
 }
 
 func fail0(err error) opener.Reply {

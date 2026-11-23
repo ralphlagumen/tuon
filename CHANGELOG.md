@@ -48,6 +48,10 @@ and versions follow [Semantic Versioning](https://semver.org/).
 - The sandboxed app can only reach Meta's servers: the launcher runs a gate (a localhost proxy) that lets through only
   Meta's hosts on https, and the sandbox refuses every other connection, including DNS lookups. Refusals go to
   `~/Library/Caches/tuon/net.log`, the header, and a note when tuon quits. `tuon sandbox-test` checks it (40 checks).
+- The sandboxed app can read only tuon's folders and Downloads, Desktop, Documents and Pictures in your home; not
+  your projects, dotfiles or `~/.config`. `@~/` completes those folders. `ctrl+f` attaches any other file through the
+  macOS Open dialog, run by the launcher, which hands over only the file you pick; a file copied in Finder is read by
+  the launcher too. `tuon sandbox-test` checks it (45 checks).
 - Scan 2026-11-23: govulncheck finds nothing tuon calls. One module-level advisory, GO-2026-5932
   (`golang.org/x/crypto/openpgp`, unmaintained): tuon doesn't use that package; the fix is only in an untagged
   x/crypto build, so tuon waits for the next tagged release.

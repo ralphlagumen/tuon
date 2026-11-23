@@ -106,7 +106,8 @@ The chat list is on the left and the open chat on the right. Press `?` in Tuon f
 | `enter` | Send |
 | `alt+enter` or `ctrl+j` | New line (Terminal.app needs "Use Option as Meta key" for `option+enter`) |
 | `@` | Tag someone; `tab` picks |
-| `@~/` | Attach a file; the path completes as you type |
+| `@~/` | Attach a file from Downloads, Desktop, Documents or Pictures; the path completes as you type |
+| `ctrl+f` | Attach any other file: pick it in the macOS Open dialog |
 | `ctrl+v` | Paste an image, or a file copied in Finder |
 | `ctrl+o` | Open the newest photo |
 | `↑` on an empty box | Step into the messages |

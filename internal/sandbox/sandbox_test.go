@@ -28,6 +28,25 @@ func TestProfile(t *testing.T) {
 	}
 }
 
+// TestProfileReads: home is unreadable except tuon's folders and the
+// attachment folders; home itself can be stat'ed, not listed.
+func TestProfileReads(t *testing.T) {
+	p := Profile("/Users/a", "/private/var/folders/x/y/T", "/Users/a/.local/bin/tuon-app", 0)
+	for _, want := range []string{`(deny file-read* (subpath "/Users/a"))`, `(subpath "/Users/a/Desktop")`, `(subpath "/Users/a/.config/tuon")`,
+		`(subpath "/Users/a/.local/bin")`, "(allow file-read-metadata\n  (literal \"/Users/a\")"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("profile missing %q", want)
+		}
+	}
+	if strings.Contains(p, `(subpath "/Users/a/Projects")`) {
+		t.Error("~/Projects must not be readable")
+	}
+	// the secret-folder denies come after the allows, so they still win
+	if strings.Index(p, `/Users/a/.ssh`) < strings.Index(p, `(subpath "/Users/a/Desktop")`) {
+		t.Error("deny list must follow the allow list")
+	}
+}
+
 // TestProfileGated: with the launcher's gate, the only way out is its port:
 // no other host, IP or port, no DNS socket (a lookup can carry data out).
 func TestProfileGated(t *testing.T) {

@@ -191,7 +191,7 @@ func (m Model) footer() string {
 	case m.composing() && len(m.sugg) > 0:
 		return keyHints("↑↓", "choose", "tab", "tag person", "esc", "close")
 	case m.composing():
-		return keyHints("enter", "send", "alt+enter", "new line", "@", "tag", "@~/", "attach", "ctrl+v", "paste image", "ctrl+o", "newest photo", "↑", "pick message", "esc esc", "clear", "tab", "chats")
+		return keyHints("enter", "send", "alt+enter", "new line", "@", "tag", "@~/", "attach", "ctrl+f", "pick file", "ctrl+v", "paste image", "ctrl+o", "newest photo", "↑", "pick message", "esc esc", "clear", "tab", "chats")
 	case m.reacting:
 		return keyHints("1-6", "react", "x", "remove mine", "esc", "cancel")
 	case m.focus == focusChat && m.selecting && m.selIndex() >= 0 && m.selIndex() < len(m.msgs) && isPlaceholder(m.msgs[m.selIndex()]):
@@ -1035,6 +1035,7 @@ func (m Model) helpView() []string {
 		head("in a chat"),
 		row("enter", "send", "alt+enter", "new line"),
 		row("@", "tag", "@~/", "attach"),
+		row("ctrl+f", "pick file", "", ""),
 		row("ctrl+v", "paste", "ctrl+o", "photo"),
 		row("↑", "pick msg", "esc esc", "clear"),
 		row("tab", "chats", "esc", "chats (empty)"),

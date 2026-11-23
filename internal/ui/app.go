@@ -1085,6 +1085,8 @@ func (m Model) onComposeKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch k.String() {
 	case "ctrl+v":
 		return m, pasteClipboard()
+	case "ctrl+f": // attach any file through the launcher's Open dialog
+		return m, tea.Batch(m.flash("Pick a file in the Open dialog…"), pickFile())
 	case "ctrl+o": // newest photo, no need to select it first
 		if imgs := m.chatImages(); len(imgs) > 0 {
 			return m, m.openPhoto(imgs[len(imgs)-1])

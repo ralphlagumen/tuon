@@ -15,6 +15,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/ralph/tuon/internal/connector"
+	"github.com/ralph/tuon/internal/opener"
+	"github.com/ralph/tuon/internal/sandbox"
 	"github.com/ralph/tuon/internal/store"
 )
 
@@ -82,6 +84,9 @@ func pathSuggestions(q string) []suggestion {
 	if strings.HasSuffix(q, "/") {
 		dir, prefix = full, ""
 	}
+	if home, _ := os.UserHomeDir(); sandbox.Active() && filepath.Clean(dir) == filepath.Clean(home) {
+		return homeFolders(home, prefix) // the sandbox can't list home: offer what it can read
+	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil
@@ -110,8 +115,25 @@ func pathSuggestions(q string) []suggestion {
 	return out
 }
 
+// errOutsideFolders: the sandbox only lets tuon read a few folders.
+var errOutsideFolders = errors.New("tuon can only read files in Downloads, Desktop, Documents and Pictures: press ctrl+f to pick this one")
+
+// homeFolders: the readable folders (sandbox.ReadableFolders) for "@~/".
+func homeFolders(home, prefix string) []suggestion {
+	var out []suggestion
+	for _, f := range sandbox.ReadableFolders {
+		if strings.HasPrefix(strings.ToLower(f), strings.ToLower(prefix)) {
+			out = append(out, suggestion{Label: "~/" + f + "/", Path: filepath.Join(home, f), IsDir: true})
+		}
+	}
+	return out
+}
+
 func readAttachment(path string) (connector.Attachment, error) {
 	st, err := os.Stat(path)
+	if errors.Is(err, os.ErrPermission) && sandbox.Active() {
+		return connector.Attachment{}, errOutsideFolders
+	}
 	if err != nil {
 		return connector.Attachment{}, err
 	}
@@ -122,6 +144,9 @@ func readAttachment(path string) (connector.Attachment, error) {
 		return connector.Attachment{}, fmt.Errorf("%s is over 25 MB", filepath.Base(path))
 	}
 	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrPermission) && sandbox.Active() {
+		return connector.Attachment{}, errOutsideFolders
+	}
 	if err != nil {
 		return connector.Attachment{}, err
 	}
@@ -170,7 +195,11 @@ func droppedPaths(s string) (paths []string, ok bool) {
 	}
 	flush()
 	for _, p := range paths {
-		if st, err := os.Stat(expandHome(p)); err != nil || st.IsDir() || !filepath.IsAbs(expandHome(p)) {
+		st, err := os.Stat(expandHome(p))
+		if errors.Is(err, os.ErrPermission) && filepath.IsAbs(expandHome(p)) {
+			continue // a dropped file the sandbox can't read: say so (readAttachment), don't type its path
+		}
+		if err != nil || st.IsDir() || !filepath.IsAbs(expandHome(p)) {
 			return nil, false
 		}
 	}
@@ -199,7 +228,13 @@ func pasteClipboard() tea.Cmd {
 			name := "pasted-" + time.Now().Format("150405") + ".png"
 			return attachedMsg{files: []connector.Attachment{{Name: name, Mime: "image/png", Data: data}}}
 		}
-		if p := clipboardFile(); p != "" {
+		if c := opener.Connect(); c != nil { // sandboxed: the launcher reads the copied file
+			if rep, err := c.Do(opener.OpClipFile); err != nil {
+				return attachedMsg{err: err}
+			} else if len(rep.Data) > 0 {
+				return attachedMsg{files: []connector.Attachment{{Name: rep.Text, Mime: mimeOf(rep.Text, rep.Data), Data: rep.Data}}}
+			}
+		} else if p := clipboardFile(); p != "" {
 			a, err := readAttachment(p)
 			if err != nil {
 				return attachedMsg{err: err}
@@ -210,6 +245,22 @@ func pasteClipboard() tea.Cmd {
 			return pasteTextMsg(t)
 		}
 		return attachedMsg{err: errors.New("nothing to paste")}
+	}
+}
+
+// pickFile: the launcher shows the macOS Open dialog and hands over only
+// the file you pick (the app can't read most folders itself).
+func pickFile() tea.Cmd {
+	return func() tea.Msg {
+		c := opener.Connect()
+		if c == nil {
+			return attachedMsg{err: errors.New("the file picker needs the launcher (run tuon): type @~/ and a path instead")}
+		}
+		rep, err := c.Do(opener.OpPickFile)
+		if err != nil {
+			return attachedMsg{err: err}
+		}
+		return attachedMsg{files: []connector.Attachment{{Name: rep.Text, Mime: mimeOf(rep.Text, rep.Data), Data: rep.Data}}}
 	}
 }
 

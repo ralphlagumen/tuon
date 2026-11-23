@@ -55,7 +55,13 @@ const (
 	ParentTTYEnv = "TUON_PARENT_TTY"
 )
 
-// denyRead: paths under your home that tuon never needs to read.
+// ReadableFolders: the folders in your home the chat app may read, so
+// `@~/` attachments complete there. Anything else you attach goes through
+// the launcher's file picker (ctrl+f), which hands over only what you pick.
+var ReadableFolders = []string{"Downloads", "Desktop", "Documents", "Pictures"}
+
+// denyRead: paths under your home that tuon never needs to read (refused
+// even if a folder above them is ever made readable).
 var denyRead = []string{
 	// keys, tokens and credentials
 	".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker", ".config/gh", ".config/gcloud",
@@ -144,6 +150,29 @@ func Profile(home, tmp, exe string, gatePort int) string {
 	q := func(p string) string { return fmt.Sprintf("%q", p) } // SBPL strings use Go-compatible escapes
 	var b strings.Builder
 	b.WriteString("(version 1)\n(allow default)\n")
+	// reads in your home: only tuon's folder, its program folder and the
+	// attachment folders. Not ~/Projects, dotfiles or anything else.
+	readable := []string{filepath.Join(home, ".config", "tuon"), filepath.Dir(realDir(exe)), filepath.Dir(exe)}
+	for _, f := range ReadableFolders {
+		readable = append(readable, filepath.Join(home, f), realDir(filepath.Join(home, f)))
+	}
+	b.WriteString("(deny file-read* (subpath " + q(home) + "))\n(allow file-read*\n")
+	for _, p := range uniq(readable) {
+		b.WriteString("  (subpath " + q(p) + ")\n")
+	}
+	b.WriteString(")\n")
+	// stat (not list) home and the folders on the way to those
+	parents := map[string]bool{home: true}
+	for _, p := range readable {
+		for d := filepath.Dir(p); strings.HasPrefix(d, home+"/") && !parents[d]; d = filepath.Dir(d) {
+			parents[d] = true
+		}
+	}
+	b.WriteString("(allow file-read-metadata\n")
+	for _, d := range sortedKeys(parents) {
+		b.WriteString("  (literal " + q(d) + ")\n")
+	}
+	b.WriteString(")\n")
 	b.WriteString("(deny file-read* file-write*\n")
 	seen := map[string]bool{}
 	for _, p := range denyRead {
@@ -255,5 +284,17 @@ func sortedKeys(m map[string]bool) []string {
 		out = append(out, k)
 	}
 	sort.Strings(out)
+	return out
+}
+
+func uniq(ps []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, p := range ps {
+		if p != "" && !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
 	return out
 }
