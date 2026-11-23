@@ -72,6 +72,14 @@ type Gate struct {
 	OnRefuse func(target string)
 	// OnUnusual is called (in its own goroutine) when uploads look unusual.
 	OnUnusual func(msg string)
+	// OnCert is called (in its own goroutine) when a host's certificate
+	// chains to a root that isn't Meta's (see metaRoots): something may be
+	// intercepting the connection.
+	OnCert func(host, root string)
+	probe  func(host string) (root string, meta bool, err error)
+	probed map[string]bool
+	certs  []string
+
 	// Idle reports whether you've been away from the keyboard IdleAfter
 	// or longer (nil: never counted as idle).
 	Idle func() bool
@@ -94,7 +102,9 @@ type Gate struct {
 }
 
 func New() *Gate {
-	return &Gate{dial: net.DialTimeout, now: time.Now, allowed: map[string]int{}, refused: map[string]int{}, totalAt: TotalWarnBytes}
+	g := &Gate{dial: net.DialTimeout, now: time.Now, allowed: map[string]int{}, refused: map[string]int{}, totalAt: TotalWarnBytes}
+	g.probe = func(host string) (string, bool, error) { return probeRoot(host, nil) } // nil: the Mac's trusted roots
+	return g
 }
 
 // Serve accepts connections until l is closed.
@@ -135,6 +145,7 @@ func (g *Gate) handle(c net.Conn) {
 	}
 	defer up.Close()
 	g.note(g.allowed, strings.ToLower(target))
+	g.checkCert(target)
 	if _, err := io.WriteString(c, "HTTP/1.1 200 Connection established\r\n\r\n"); err != nil {
 		return
 	}

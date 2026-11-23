@@ -71,6 +71,14 @@ func startGate() (*gate, error) {
 		gt.mu.Unlock()
 		tell("unusual " + msg)
 	}
+	gt.g.OnCert = func(host, root string) {
+		msg := fmt.Sprintf("%s's certificate comes from %s, not Meta's authority (DigiCert): something may be intercepting tuon's connections", host, root)
+		gt.log("CERT " + msg)
+		gt.mu.Lock()
+		gt.alarms = append(gt.alarms, msg)
+		gt.mu.Unlock()
+		tell("cert " + msg)
+	}
 	go gt.g.Serve(l)
 	gt.done = make(chan struct{})
 	go func() { // a line every 30 min, so a killed or crashed run still leaves numbers
@@ -124,15 +132,15 @@ func (gt *gate) stopNow() {
 	gt.w.Close()
 	gt.events.Close()
 	refused := gt.g.Refused()
-	gt.log(fmt.Sprintf("run %s–%s %s; allowed: %s; refused: %s; terminal codes dropped: %d",
+	gt.log(fmt.Sprintf("run %s–%s %s; allowed: %s; refused: %s; certificates: %s; terminal codes dropped: %d",
 		gt.start.Format(time.RFC3339), time.Now().Format("15:04:05"), gt.traffic(),
-		strings.Join(gt.g.AllowedHosts(), ", "), strings.Join(refused, ", "), termDropped.Load()))
+		strings.Join(gt.g.AllowedHosts(), ", "), strings.Join(refused, ", "), strings.Join(gt.g.Certs(), ", "), termDropped.Load()))
 	gt.mu.Lock()
 	alarms := gt.alarms
 	gt.mu.Unlock()
 	if len(alarms) > 0 {
-		fmt.Fprintf(os.Stderr, "tuon: unusual upload: %s.\n  If you didn't send big files, check Messenger on your phone for messages you didn't send,\n  and see %s.\n",
-			strings.Join(alarms, "; "), gateLog())
+		fmt.Fprintf(os.Stderr, "tuon: %s.\n  See %s. A proxy, VPN or security tool that inspects traffic does this; so does malware.\n  If you didn't send big files, check Messenger on your phone for messages you didn't send.\n",
+			strings.Join(alarms, ";\n  "), gateLog())
 	}
 	if len(refused) > 0 {
 		fmt.Fprintf(os.Stderr, "tuon: blocked %d connection target(s) that aren't Meta's servers: %s\n  (see %s; if this wasn't you testing, a library in tuon may be misbehaving)\n",

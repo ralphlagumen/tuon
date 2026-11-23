@@ -49,6 +49,7 @@ func TestGate(t *testing.T) {
 		}
 	}()
 	g := New()
+	g.probe = func(string) (string, bool, error) { return "DigiCert Global Root G2", true, nil } // no network
 	g.dial = func(network, addr string, timeout time.Duration) (net.Conn, error) {
 		return net.DialTimeout(network, up.Addr().String(), timeout) // every allowed host → the echo server
 	}

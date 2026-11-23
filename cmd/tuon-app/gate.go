@@ -33,6 +33,9 @@ func watchGate(p *tea.Program, log zerolog.Logger) {
 			case kind == "refused":
 				log.Warn().Str("target", text).Msg("network gate refused a connection")
 				p.Send(ui.WarnMsg("Blocked a connection to " + text + ": not a Meta server (see ~/Library/Caches/tuon/net.log)"))
+			case kind == "cert":
+				log.Warn().Str("what", text).Msg("network gate: certificate not from Meta's authority")
+				p.Send(ui.WarnMsg("Possible interception: " + text + ". Don't log in again until you know why"))
 			case kind == "unusual":
 				log.Warn().Str("what", text).Msg("network gate: unusual upload")
 				p.Send(ui.WarnMsg("Unusual upload: " + text + ". If you didn't send big files, check Messenger on your phone"))

@@ -67,6 +67,9 @@ and versions follow [Semantic Versioning](https://semver.org/).
   back, e.g. downgraded from Touch ID to a passphrase), its key trace never writes through a link, saved files are
   moved into Downloads by the launcher with the downloaded-from-the-internet mark (the app can no longer write
   Downloads), and the app can write only its own temp folder, not other apps' caches next to it.
+- Interception alarm: for each Meta host it lets through, the gate checks once per run that the certificate chains to
+  DigiCert (Meta's authority); anything else the Mac trusts (a corporate proxy, a malware-installed CA) shows a
+  warning in the header, `net.log` and on quit.
 - Scan 2026-11-23: govulncheck finds nothing tuon calls. One module-level advisory, GO-2026-5932
   (`golang.org/x/crypto/openpgp`, unmaintained): tuon doesn't use that package; the fix is only in an untagged
   x/crypto build, so tuon waits for the next tagged release.

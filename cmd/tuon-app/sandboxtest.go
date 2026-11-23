@@ -147,6 +147,21 @@ func sandboxTest() int {
 		check("launcher shows a file outside Downloads", false, err)
 		_, err = c.Do(opener.OpSave, filepath.Join(home, ".config", "tuon", "tuon.db"), "x")
 		check("launcher saves a file from outside tuon's temp", false, err)
+		if os.Getenv("TUON_SANDBOXTEST_SAVE") == "1" { // leaves a file in Downloads: only when asked
+			dir := filepath.Join(os.TempDir(), "tuon")
+			_ = os.MkdirAll(dir, 0o700)
+			f, err := os.CreateTemp(dir, "save-*")
+			if err == nil {
+				_, _ = f.WriteString("tuon save probe\n")
+				f.Close()
+				var rep opener.Reply
+				rep, err = c.Do(opener.OpSave, f.Name(), "tuon-save-probe.txt")
+				if err == nil {
+					fmt.Println("  saved:", rep.Text)
+				}
+			}
+			check("save a file into Downloads through the launcher", true, err)
+		}
 	} else {
 		check("the launcher's opener is connected", true, errors.New("not connected"))
 	}

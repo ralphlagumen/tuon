@@ -33,8 +33,16 @@ func TestGateWiring(t *testing.T) {
 	if err != nil || !strings.HasPrefix(line, "unusual tuon uploaded 3.0 MB") {
 		t.Fatalf("app got %q, %v", line, err)
 	}
+	gt.g.OnCert("gateway.facebook.com", "Totally Legit Inspection CA")
+	line, err = bufio.NewReader(gt.events).ReadString('\n')
+	if err != nil || !strings.HasPrefix(line, "cert gateway.facebook.com's certificate comes from Totally Legit Inspection CA") {
+		t.Fatalf("app got %q, %v", line, err)
+	}
 	gt.stop()
 	b, _ := os.ReadFile(gateLog())
+	if !strings.Contains(string(b), "CERT gateway.facebook.com") {
+		t.Fatalf("net.log has no CERT line:\n%s", b)
+	}
 	if !strings.Contains(string(b), "UNUSUAL tuon uploaded 3.0 MB") || !strings.Contains(string(b), "up 0 B, down 0 B, up while away 0 B") {
 		t.Fatalf("net.log:\n%s", b)
 	}
