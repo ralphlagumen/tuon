@@ -3,11 +3,13 @@ package main
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ralph/tuon/internal/opener"
@@ -77,6 +79,13 @@ func sandboxTest() int {
 		check("write ~/Library/Caches/tuon (update, login)", false, write(filepath.Join(base, "sandbox-probe")))
 		check("read ~/Library/Caches/tuon (login browser)", false, read(base))
 	}
+	// what a bad library could use beyond tuon (audit 14): the SSH agent,
+	// tokens in the environment, local sockets (Docker, other tools)
+	check("SSH agent passed in (SSH_AUTH_SOCK)", false, envSet("SSH_AUTH_SOCK"))
+	check("other secrets in the environment (tokens)", false, secretEnv())
+	check("connect to a Unix socket (SSH agent, Docker)", false, unixDial())
+	_, err := net.LookupHost("www.facebook.com")
+	check("look up www.facebook.com (name lookups)", true, err)
 	run := func(name string, args ...string) error { return exec.Command(name, args...).Run() }
 	check("start /bin/sh", false, run("/bin/sh", "-c", "true"))
 	if exe, err := os.Executable(); err == nil { // tuon runs unsandboxed: never from in here
@@ -136,6 +145,50 @@ func sandboxTest() int {
 	}
 	fmt.Println("  All checks passed.")
 	return 0
+}
+
+// envSet: nil (allowed) when the variable reached the app.
+func envSet(k string) error {
+	if os.Getenv(k) != "" {
+		return nil
+	}
+	return errors.New("absent")
+}
+
+// secretEnv: nil when a variable that looks like a token reached the app.
+func secretEnv() error {
+	for _, kv := range os.Environ() {
+		k, _, _ := strings.Cut(kv, "=")
+		u := strings.ToUpper(k)
+		if strings.HasPrefix(u, "TUON_") {
+			continue
+		}
+		for _, w := range []string{"TOKEN", "SECRET", "PASSWORD", "API_KEY", "_SOCK", "CREDENTIAL"} {
+			if strings.Contains(u, w) {
+				return nil
+			}
+		}
+	}
+	return errors.New("none")
+}
+
+// unixDial listens on a socket of its own in temp and tries to connect:
+// nil when connecting worked.
+func unixDial() error {
+	sock := filepath.Join(os.TempDir(), "tuon-probe.sock")
+	os.Remove(sock)
+	l, err := net.Listen("unix", sock)
+	if err != nil {
+		return nil // couldn't set up: count as allowed, so the check fails loudly
+	}
+	defer os.Remove(sock)
+	defer l.Close()
+	c, err := net.DialTimeout("unix", sock, time.Second)
+	if err != nil {
+		return err
+	}
+	c.Close()
+	return nil
 }
 
 // escaped builds the probe app, asks start to launch it, and reports nil

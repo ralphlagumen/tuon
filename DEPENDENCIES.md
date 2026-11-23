@@ -28,7 +28,11 @@ These handle the network, your session or encryption. Read the diff of every upd
    (`https://github.com/<owner>/<repo>/compare/<old>...<new>`). Look for new network calls, new places that
    read keys or cookies, obfuscated code, install-time scripts, or a new maintainer.
 4. Update the "Reviewed version" column above in the same commit, and say what you checked in the commit message.
-5. Run `./scripts/check.sh`, build, and test tuon on your account before releasing.
+5. Run `./scripts/check.sh` (tests run sandboxed), build, and test tuon on your account before releasing. Run any
+   `TUON_LIVE` test through `go run ./scripts/devsandbox --live -- go test …`: a new version's code runs there first.
+
+Every module linked into the chat app runs with the same rights, not only the watched ones: see SECURITY.md
+"Limits" for what a bad one can reach.
 
 Never add a `replace` directive or a new watched module without the same review. `tuon update` shows users
 every `go.mod` change and asks before building it.

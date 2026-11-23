@@ -17,6 +17,10 @@
 // tuon-app here, runs the login browser when tuon-app asks (ExitBrowserLogin)
 // and installs updates. So no dependency of the chat app ever runs outside.
 //
+// It also gets only the environment variables it needs (AppEnv), so no
+// SSH agent socket or tokens, and it can't connect to Unix sockets (the
+// SSH agent, Docker), except the one macOS needs for name lookups.
+//
 // Network stays open (Messenger needs it). Elsewhere this is a no-op for
 // now. TUON_NO_SANDBOX=1 turns it off for troubleshooting.
 package sandbox
@@ -25,6 +29,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -86,6 +91,38 @@ var allowExec = []string{
 	"/usr/bin/afplay", "/usr/bin/pbcopy", "/usr/bin/pbpaste", "/usr/bin/fdesetup",
 }
 
+// keepEnv and keepPrefix: the environment the chat app gets. Everything
+// else (SSH_AUTH_SOCK, tokens, other tools' sockets) stays with the
+// launcher, so a bad library in the app can't find or use it. Proxy
+// variables pass so the app can say it ignored them (it drops them).
+var keepEnv = map[string]bool{
+	"HOME": true, "USER": true, "LOGNAME": true, "PATH": true, "TMPDIR": true, "TZ": true, "LANG": true,
+	"COLORTERM": true, "COLORFGBG": true, "NO_COLOR": true, "CLICOLOR": true, "CLICOLOR_FORCE": true,
+	"VTE_VERSION": true, "__CF_USER_TEXT_ENCODING": true, // pbcopy/pbpaste use it for UTF-8
+	"HTTPS_PROXY": true, "https_proxy": true, "HTTP_PROXY": true, "http_proxy": true, "ALL_PROXY": true, "all_proxy": true,
+}
+var keepPrefix = []string{"TUON_", "LC_", "TERM", "KITTY_", "GHOSTTY_", "WEZTERM_", "ITERM_"}
+
+// AppEnv keeps only the variables in keepEnv / keepPrefix.
+func AppEnv(env []string) []string {
+	var out []string
+	for _, kv := range env {
+		k, _, _ := strings.Cut(kv, "=")
+		ok := keepEnv[k]
+		for _, p := range keepPrefix {
+			ok = ok || strings.HasPrefix(k, p)
+		}
+		if ok {
+			out = append(out, kv)
+		}
+	}
+	return out
+}
+
+// dnsSocket: macOS name lookups go through this socket; every other Unix
+// socket is refused.
+const dnsSocket = "/private/var/run/mDNSResponder"
+
 // ClearMark forgets an inherited "already sandboxed" mark: the launcher
 // calls it first, so a mark planted in its environment can't make it
 // start the app unsandboxed (or make the app think it is sandboxed).
@@ -132,6 +169,65 @@ func Profile(home, tmp, exe string) string {
 	b.WriteString(")\n")
 	// no scripting other apps (Terminal, Finder, System Events…)
 	b.WriteString("(deny appleevent-send)\n")
+	// no Unix sockets (SSH agent, Docker, local tools) but name lookups
+	b.WriteString("(deny network-outbound (remote unix-socket))\n")
+	b.WriteString("(allow network-outbound (remote unix-socket (path-literal " + q(dnsSocket) + ")))\n")
+	return b.String()
+}
+
+// DevProfile is the profile for running Go tests and tools on the dev
+// machine, where dependency code runs too (`go test` runs their init and
+// test code). It may read only the repo, Go's module cache and toolchain
+// and its own build cache under home; it may write only temp and that
+// build cache (separate from the normal one, so a test can't poison what
+// a later `go build` links). No Unix sockets; no network beyond localhost
+// unless net. live adds tuon's own folder, for TUON_LIVE tests.
+func DevProfile(home, tmp, repo, gopath, cache string, net, live bool) string {
+	q := func(p string) string { return fmt.Sprintf("%q", p) }
+	var b strings.Builder
+	b.WriteString("(version 1)\n(allow default)\n")
+	b.WriteString("(deny file-read* (subpath " + q(home) + "))\n")
+	read := []string{repo, gopath, cache, filepath.Join(home, "Library", "Application Support", "go")}
+	if live {
+		read = append(read, filepath.Join(home, ".config", "tuon"), filepath.Join(home, ".local", "bin"))
+	}
+	b.WriteString("(allow file-read*\n  (literal " + q(home) + ")\n")
+	for _, p := range read {
+		b.WriteString("  (subpath " + q(p) + ")\n")
+	}
+	b.WriteString(")\n")
+	// stat (not list or read) the folders on the way to them: SQLite and
+	// others lstat each parent of a path they open
+	parents := map[string]bool{}
+	for _, p := range read {
+		for d := filepath.Dir(p); strings.HasPrefix(d, home+"/") && !parents[d]; d = filepath.Dir(d) {
+			parents[d] = true
+		}
+	}
+	if len(parents) > 0 {
+		b.WriteString("(allow file-read-metadata\n")
+		for _, d := range sortedKeys(parents) {
+			b.WriteString("  (literal " + q(d) + ")\n")
+		}
+		b.WriteString(")\n")
+	}
+	write := []string{cache, filepath.Dir(tmp)}
+	if live {
+		write = append(write, filepath.Join(home, ".config", "tuon"))
+	}
+	b.WriteString("(deny file-write* (require-not (require-any\n")
+	for _, p := range write {
+		b.WriteString("  (subpath " + q(p) + ")\n")
+	}
+	b.WriteString(`  (regex #"^/dev/(null|zero|tty|ttys[0-9]+|dtracehelper|random|urandom)$")` + "\n")
+	b.WriteString(")))\n")
+	b.WriteString("(deny appleevent-send)\n")
+	b.WriteString("(deny network-outbound (remote unix-socket))\n")
+	if net {
+		b.WriteString("(allow network-outbound (remote unix-socket (path-literal " + q(dnsSocket) + ")))\n")
+	} else {
+		b.WriteString("(deny network-outbound (remote ip))\n(allow network-outbound (remote ip \"localhost:*\"))\n")
+	}
 	return b.String()
 }
 
@@ -142,4 +238,13 @@ func realDir(p string) string {
 		return r
 	}
 	return p
+}
+
+func sortedKeys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }

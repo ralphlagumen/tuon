@@ -61,8 +61,10 @@ Implement `connector.Connector` in a new package under `internal/connector/`:
 2. Keep the change focused. Unrelated fixes go in their own branch.
 3. Format and check:
    ```sh
-   gofmt -w . && go vet ./... && go test ./...
+   gofmt -w . && go vet ./... && go run ./scripts/devsandbox -- go test ./...
    ```
+   Tests run every dependency's code. On macOS, `scripts/devsandbox` runs them in a sandbox: no home folder, SSH
+   agent, Unix sockets, internet or repo writes. `./scripts/check.sh` does this for you.
 4. **Try it for real** (below). Passing tests alone don't make a change ready.
 5. Open a pull request with:
    - what changed and why, in plain words
@@ -77,10 +79,13 @@ Short summary line in the present tense (`Add folder reordering`), a blank line,
 
 | Command | What it does | Touches Messenger? |
 |---|---|---|
-| `go test ./...` | Unit and UI tests with a fake connector | No |
-| `TUON_LIVE=1 go test ./internal/ui -run TestLive -v` | Syncs your real account and prints the screens | Reads only |
-| `TUON_LIVE=1 go test ./internal/connector/messenger -run TestLiveThreadTypes -v` | Counts what kinds of chats Messenger sends | Reads only |
+| `go run ./scripts/devsandbox -- go test ./...` | Unit and UI tests with a fake connector, sandboxed | No |
+| `TUON_LIVE=1 go run ./scripts/devsandbox --live -- go test ./internal/ui -run TestLive -v` | Syncs your real account and prints the screens | Reads only |
+| `TUON_LIVE=1 go run ./scripts/devsandbox --live -- go test ./internal/connector/messenger -run TestLiveThreadTypes -v` | Counts what kinds of chats Messenger sends | Reads only |
 | `TUON_PREVIEW=bin/preview go test ./internal/ui -run 'TestScreenshot\|TestPreview'` | Renders the UI and photos to PNG in `bin/preview` | No |
+
+`--live` adds the internet and tuon's own folder (your real data), nothing else. The preview and screenshot tests
+write into the repo, which the sandbox refuses, so they run outside it: run them only on dependencies you've reviewed.
 
 UI tests drive the real `Model` with key presses, then check the text on screen. When you change how something looks, update or add a test that checks what a person would see, not internal fields.
 
@@ -117,4 +122,4 @@ Open an issue, or start a draft pull request early and ask there. Showing a roug
 
 ## Before you push
 
-Run `./scripts/check.sh`: module checksums, build, vet, tests and known vulnerabilities. There's no hosted CI, so this is the check.
+Run `./scripts/check.sh`: module checksums, build, vet, tests and known vulnerabilities (tests and govulncheck in the sandbox on macOS). It fails if the release signing key is loaded in your SSH agent. There's no hosted CI, so this is the check.

@@ -20,7 +20,43 @@ func TestProfile(t *testing.T) {
 	if strings.Contains(p, `"/Users/a/.local/bin/tuon"`) {
 		t.Error("the sandboxed app must not be able to start the launcher (it runs unsandboxed)")
 	}
-	if strings.Contains(p, "network") {
-		t.Error("the profile shouldn't touch the network (Messenger needs it)")
+	if !strings.Contains(p, "(deny network-outbound (remote unix-socket))") || !strings.Contains(p, "mDNSResponder") {
+		t.Error("Unix sockets (SSH agent, Docker) must be refused, name lookups allowed")
+	}
+	if strings.Contains(p, "(remote ip") {
+		t.Error("the profile shouldn't limit the internet yet (Messenger needs it)")
+	}
+}
+
+func TestAppEnv(t *testing.T) {
+	got := strings.Join(AppEnv([]string{
+		"HOME=/h", "TERM=xterm", "TERM_PROGRAM=ghostty", "LC_ALL=C", "TUON_DEBUG=1", "__CF_USER_TEXT_ENCODING=0x1F5:0x8000100:0x0",
+		"SSH_AUTH_SOCK=/tmp/agent", "GITHUB_TOKEN=x", "AWS_SECRET_ACCESS_KEY=y", "DOCKER_HOST=unix:///s", "GPG_AGENT_INFO=z",
+	}), " ")
+	for _, want := range []string{"HOME=/h", "TERM=xterm", "TERM_PROGRAM=ghostty", "LC_ALL=C", "TUON_DEBUG=1", "__CF_USER_TEXT_ENCODING"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %s", want)
+		}
+	}
+	for _, bad := range []string{"SSH_AUTH_SOCK", "GITHUB_TOKEN", "AWS_SECRET", "DOCKER_HOST", "GPG_AGENT"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("%s must not reach the app", bad)
+		}
+	}
+}
+
+func TestDevProfile(t *testing.T) {
+	p := DevProfile("/Users/a", "/private/var/folders/x/y/T", "/Users/a/src/tuon", "/Users/a/go", "/Users/a/Library/Caches/tuon-dev-gocache", false, false)
+	for _, want := range []string{`(deny file-read* (subpath "/Users/a"))`, `(subpath "/Users/a/src/tuon")`, `(remote unix-socket)`, `(deny network-outbound (remote ip))`} {
+		if !strings.Contains(p, want) {
+			t.Errorf("dev profile missing %q", want)
+		}
+	}
+	if strings.Contains(p, ".config/tuon") {
+		t.Error("tuon's real data only with live")
+	}
+	live := DevProfile("/Users/a", "/private/var/folders/x/y/T", "/Users/a/src/tuon", "/Users/a/go", "/Users/a/Library/Caches/tuon-dev-gocache", true, true)
+	if !strings.Contains(live, "(allow file-read-metadata\n  (literal \"/Users/a/.config\")") {
+		t.Error("live: SQLite needs to stat ~/.config on the way to ~/.config/tuon")
 	}
 }

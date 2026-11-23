@@ -106,7 +106,7 @@ pump:
 func liveOpen(t *testing.T) (*store.Store, auth.Creds, *sql.DB) {
 	t.Helper()
 	dir := store.Dir()
-	h := vault.FindHelper()
+	h := liveHelper()
 	if vault.Kind(dir) != vault.KindEnclave || h == nil {
 		t.Skip("needs the Touch ID vault and its helper")
 	}
@@ -128,4 +128,19 @@ func liveOpen(t *testing.T) (*store.Store, auth.Creds, *sql.DB) {
 		t.Fatal(err)
 	}
 	return st, creds, kdb
+}
+
+// liveHelper: the Touch ID helper for live tests. A test binary runs from
+// Go's build folder, never next to the helper, so fall back to the
+// installed one (~/.local/bin, from install.sh), if only you can change it.
+func liveHelper() *vault.Helper {
+	if h := vault.FindHelper(); h != nil {
+		return h
+	}
+	home, _ := os.UserHomeDir()
+	p := filepath.Join(home, ".local", "bin", "tuon-keyhelper")
+	if st, err := os.Stat(p); err == nil && st.Mode().IsRegular() && st.Mode().Perm()&0o022 == 0 {
+		return &vault.Helper{Path: p}
+	}
+	return nil
 }
