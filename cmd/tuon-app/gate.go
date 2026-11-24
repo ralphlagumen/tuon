@@ -36,10 +36,25 @@ func watchGate(p *tea.Program, log zerolog.Logger) {
 			case kind == "cert":
 				log.Warn().Str("what", text).Msg("network gate: certificate not from Meta's authority")
 				p.Send(ui.WarnMsg("Possible interception: " + text + ". Don't log in again until you know why"))
+			case kind == "update" && releaseName(text):
+				p.Send(ui.UpdateMsg(text))
 			case kind == "unusual":
 				log.Warn().Str("what", text).Msg("network gate: unusual upload")
 				p.Send(ui.WarnMsg("Unusual upload: " + text + ". If you didn't send big files, check Messenger on your phone"))
 			}
 		}
 	}()
+}
+
+// releaseName: a plain release tag (v1.2.3), nothing else on the screen.
+func releaseName(s string) bool {
+	if len(s) < 4 || len(s) > 20 || s[0] != 'v' {
+		return false
+	}
+	for _, r := range s[1:] {
+		if (r < '0' || r > '9') && r != '.' {
+			return false
+		}
+	}
+	return true
 }

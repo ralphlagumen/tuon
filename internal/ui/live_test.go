@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	zlog "github.com/rs/zerolog/log"
 
 	"github.com/ralph/tuon/internal/auth"
+	"github.com/ralph/tuon/internal/connector"
 	"github.com/ralph/tuon/internal/connector/messenger"
 	"github.com/ralph/tuon/internal/keystore"
 	"github.com/ralph/tuon/internal/store"
@@ -21,7 +23,8 @@ import (
 )
 
 // TestLive runs the real Messenger connector against the real store and
-// prints what the screens look like. Read-only: it never sends.
+// prints what the screens look like. Read-only: it never sends, not even
+// "Seen" when it opens a chat (readOnly).
 //
 //	TUON_LIVE=1 go test ./internal/ui -run TestLive -v
 func TestLive(t *testing.T) {
@@ -48,7 +51,7 @@ func TestLive(t *testing.T) {
 	conn.SetKeyDB(kdb) // never AllowNewDevice
 	defer conn.Close()
 
-	m := New(ctx, st, conn, "messenger")
+	m := New(ctx, st, readOnly{conn, t}, "messenger")
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 90, Height: 24})
 	m = next.(Model)
 	// Init batches the connect with timers; run the connect the way Bubble Tea would
@@ -99,6 +102,27 @@ pump:
 		}
 		t.Logf("chat %q: %d messages loaded\n%s", m.chat.Display, len(m.msgs), ansi.Strip(m.View()))
 	}
+}
+
+// readOnly keeps TestLive from reaching anyone: opening a chat would
+// otherwise send "Seen" to a real person (with :seen on).
+type readOnly struct {
+	connector.Connector
+	t *testing.T
+}
+
+func (r readOnly) MarkRead(context.Context, string, []connector.Message) error { return nil }
+func (r readOnly) Send(context.Context, string, string, []connector.Mention, *connector.ReplyRef) error {
+	r.t.Error("TestLive tried to send a message")
+	return errors.New("read-only")
+}
+func (r readOnly) SendFile(context.Context, string, connector.Attachment) error {
+	r.t.Error("TestLive tried to send a file")
+	return errors.New("read-only")
+}
+func (r readOnly) React(context.Context, string, string, string, string) error {
+	r.t.Error("TestLive tried to react")
+	return errors.New("read-only")
 }
 
 // liveOpen opens the real data the way tuon does: the vault (one Touch

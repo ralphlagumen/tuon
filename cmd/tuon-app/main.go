@@ -93,6 +93,9 @@ func main() {
 	}
 	for {
 		err := run()
+		if errors.Is(err, errUpdate) {
+			os.Exit(sandbox.ExitUpdate) // the launcher updates and restarts tuon
+		}
 		if !errors.Is(err, messenger.ErrLoggedOut) {
 			if err != nil {
 				fail(err)
@@ -148,6 +151,9 @@ func fail(err error) {
 	fmt.Fprintln(os.Stderr, "tuon:", err)
 	os.Exit(1)
 }
+
+// errUpdate: you typed :update.
+var errUpdate = errors.New("update asked for")
 
 func run() error {
 	creds, err := loadLogin()
@@ -265,6 +271,9 @@ func run() error {
 	}
 	if err == nil && fm.LoggedOut() {
 		return messenger.ErrLoggedOut
+	}
+	if err == nil && fm.WantsUpdate() {
+		return errUpdate
 	}
 	return err
 }

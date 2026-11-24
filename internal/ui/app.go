@@ -20,6 +20,7 @@ import (
 	"github.com/ralph/tuon/internal/connector/messenger"
 	"github.com/ralph/tuon/internal/opener"
 	"github.com/ralph/tuon/internal/safefile"
+	"github.com/ralph/tuon/internal/sandbox"
 	"github.com/ralph/tuon/internal/store"
 )
 
@@ -102,13 +103,15 @@ type Model struct {
 	selID        string // selected message; "" = follow the newest
 	scroll       int    // lines scrolled up from the bottom
 	loadingOlder bool
-	synced       map[string]bool   // encrypted chats already filled from the PIN backup this run
-	refilling    map[string]bool   // chats waiting to refill a message that couldn't be decrypted
-	askedName    map[string]bool   // senders whose name we already asked Messenger for
-	checkAt      time.Time         // a redraw is due then, to flip "sending…" to "not sent"
-	warnings     []string          // lasting warnings, all shown (a security note must not hide another)
-	keysWarn     string            // the decrypt warning, so it can be taken down when things recover
-	keys         *keysPanel        // the :keys panel, when open
+	synced       map[string]bool // encrypted chats already filled from the PIN backup this run
+	refilling    map[string]bool // chats waiting to refill a message that couldn't be decrypted
+	askedName    map[string]bool // senders whose name we already asked Messenger for
+	checkAt      time.Time       // a redraw is due then, to flip "sending…" to "not sent"
+	warnings     []string        // lasting warnings, all shown (a security note must not hide another)
+	keysWarn     string          // the decrypt warning, so it can be taken down when things recover
+	keys         *keysPanel      // the :keys panel, when open
+	updateTag    string          // a newer release the launcher found
+	wantUpdate   bool
 	keysChecked  map[string]bool   // verified people whose keys were checked this run
 	keyWarns     map[string]string // chat → its "keys changed since you verified" warning
 	lock         lockConfig        // the lock screen, once main turns it on
@@ -266,6 +269,12 @@ func New(ctx context.Context, st *store.Store, conn connector.Connector, platfor
 
 // LoggedOut reports that tuon quit because Messenger logged you out.
 func (m Model) LoggedOut() bool { return m.loggedOut }
+
+// UpdateMsg: the launcher found a newer tuon release (tag).
+type UpdateMsg string
+
+// WantsUpdate: you typed :update; the launcher installs it and restarts.
+func (m Model) WantsUpdate() bool { return m.wantUpdate }
 
 // Warn shows a lasting warning in the status line (e.g. disk not encrypted).
 func (m *Model) Warn(text string) {
@@ -479,6 +488,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case keysMsg:
 		m.onKeys(msg)
+		return m, nil
+
+	case UpdateMsg:
+		m.updateTag = string(msg)
 		return m, nil
 
 	case peopleMsg:
@@ -1541,6 +1554,12 @@ func (m Model) runCommand(cmd string) (tea.Model, tea.Cmd) {
 		return m, m.flash("Previews off: no message text until you open a chat")
 	case "keys":
 		return m.openKeys()
+	case "update":
+		if !sandbox.Active() { // only the launcher may replace tuon's programs
+			return m, m.flash("Quit tuon and run `tuon update`")
+		}
+		m.wantUpdate = true
+		return m, tea.Quit
 	case "help":
 		m.mode = modeHelp
 	case "lock":

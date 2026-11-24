@@ -141,6 +141,9 @@ func (m Model) mainView() []string {
 	if m.statusErr {
 		status = sErr.Render(termSafe(m.status) + " ")
 	}
+	if m.updateTag != "" {
+		status = sAccent.Render("tuon "+termSafe(m.updateTag)+" is out: :update") + "  " + status
+	}
 	if len(m.warnings) > 0 {
 		status = sErr.Render("⚠ "+termSafe(strings.Join(m.warnings, " · "))) + "  " + status
 	}
@@ -1066,6 +1069,7 @@ func (m Model) helpView() []string {
 		cmd(":hush  :unhush", "hide a chat from every view (:hushed to find it)"),
 		cmd(":H  :hushed", "show hushed chats"),
 		cmd(":k  :keys", "compare an encrypted chat's keys with your phone, mark verified"),
+		cmd(":update", "install the newest tuon release and restart"),
 		cmd(":delete", "delete a chat and its messages (asks to confirm)"),
 		cmd(":s  :sound", "new-message sound and volume"),
 		cmd(":l  :lock", "lock tuon now"),

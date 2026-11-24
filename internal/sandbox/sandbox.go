@@ -48,6 +48,9 @@ const (
 	// the sandbox (the browser needs the keychain). The launcher runs it
 	// and starts the app again with the cookies on LoginFDEnv.
 	ExitBrowserLogin = 43
+	// ExitUpdate: you typed :update. The launcher (which may write tuon's
+	// programs) installs the newest signed release and starts tuon again.
+	ExitUpdate = 44
 	// KeyFDEnv names the pipe (fd 3) with the unlocked vault's key.
 	KeyFDEnv = "TUON_KEY_FD"
 	// LoginFDEnv names the pipe (fd 4) with a browser login's cookies.

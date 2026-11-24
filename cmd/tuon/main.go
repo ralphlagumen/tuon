@@ -55,6 +55,11 @@ func main() {
 	if base := paths.WorkBase(); base != "" { // its folder for update and login work, out of the app's reach
 		_ = os.MkdirAll(base, 0o700)
 	}
+	if tag := pendingUpdate(loadState()); tag != "" && len(args) == 0 && term.IsTerminal(int(os.Stdin.Fd())) {
+		if offerUpdate(tag) {
+			restart(args)
+		}
+	}
 	os.Exit(launch(app, args))
 }
 
@@ -103,6 +108,10 @@ func launch(app string, args []string) int {
 		return 1
 	}
 	defer gt.stop()
+	if tag := pendingUpdate(loadState()); tag != "" {
+		gt.tell("update " + tag) // "not now" at the start: the header still says so
+	}
+	refreshUpdates(func(tag string) { gt.tell("update " + tag) })
 	var key []byte   // the unlocked vault's key, for the app
 	var login []byte // cookies from a browser login, for the app
 	for {
@@ -125,6 +134,16 @@ func launch(app string, args []string) int {
 		}
 		if code == 0 && len(args) > 0 && args[0] == "logout" {
 			forgetBrowser() // the login window's profile holds a Facebook login too
+		}
+		if code == sandbox.ExitUpdate { // :update in the app
+			if err := update(); err != nil {
+				fmt.Fprintln(os.Stderr, "\n  tuon: update failed:", err)
+				fmt.Print("  Press enter to go back to tuon. ")
+				readLine()
+				continue
+			}
+			gt.stop()
+			restart(args)
 		}
 		if code != sandbox.ExitBrowserLogin {
 			return code
@@ -173,6 +192,13 @@ func runPlain(app string, args []string, why string) int {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "tuon:", err)
 		return 1
+	}
+	if code == sandbox.ExitUpdate { // :update in the app
+		if err := update(); err != nil {
+			fmt.Fprintln(os.Stderr, "tuon: update failed:", err)
+			return 1
+		}
+		restart(args)
 	}
 	if code == 0 && len(args) > 0 && args[0] == "logout" {
 		forgetBrowser()

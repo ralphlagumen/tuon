@@ -100,3 +100,19 @@ func TestKeysOnlyForEncrypted1to1(t *testing.T) {
 		t.Fatalf("plain chat: %q", m.toast)
 	}
 }
+
+// TestUpdateNotice: the launcher's notice shows in the header; :update
+// outside the launcher says how to update instead of quitting.
+func TestUpdateNotice(t *testing.T) {
+	m, _, _ := newTestModel(t, 120, 30)
+	next, _ := m.Update(UpdateMsg("v0.5.0"))
+	m = next.(Model)
+	if !strings.Contains(ansi.Strip(m.View()), "tuon v0.5.0 is out: :update") {
+		t.Fatalf("no notice:\n%s", ansi.Strip(m.View()))
+	}
+	next, cmd := m.runCommand("update")
+	m = next.(Model)
+	if m.WantsUpdate() || cmd == nil || !strings.Contains(m.toast, "tuon update") {
+		t.Fatalf("not under the launcher: should say how, not quit (toast %q)", m.toast)
+	}
+}

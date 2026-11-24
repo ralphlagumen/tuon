@@ -37,6 +37,7 @@ type gate struct {
 	l        net.Listener
 	port     int
 	events   *os.File // the app's end of the refusals pipe (fd 7)
+	tell     func(line string)
 	w        *os.File
 	start    time.Time
 }
@@ -58,6 +59,7 @@ func startGate() (*gate, error) {
 		_ = w.SetWriteDeadline(time.Now().Add(time.Second)) // an app that stops reading can't stall us
 		_, _ = fmt.Fprintln(w, line)
 	}
+	gt.tell = tell
 	gt.g.OnRefuse = func(target string) {
 		gt.log("refused " + target)
 		tell("refused " + target)

@@ -2,10 +2,10 @@
   <img src="docs/img/logo.svg" width="112" alt="tuon logo: an open enso ring shaped like a chat bubble, with a dot at its centre">
 </p>
 
-<h1 align="center">tuon</h1>
+<h1 align="center">tuon: Messenger in your terminal</h1>
 
 <p align="center">
-  A lightweight terminal client for Facebook Messenger: your chats, sorted into folders, and nothing else.<br>
+  A lightweight terminal client (TUI) for Facebook Messenger: your chats, sorted into folders, and nothing else.<br>
   <em>Tuon</em> (said <em>too-OHN</em>) is Tagalog for "focus".
 </p>
 
@@ -19,7 +19,7 @@
   <img src="docs/img/screen-chat.svg" alt="tuon: the chat list on the left, a group chat on the right, with a reply being written">
 </p>
 
-Messenger's apps are heavy and built to keep you scrolling. Tuon keeps only the conversations: no feed, stories, ads or suggestions. It runs in a terminal window, uses about 40 MB of memory, and sorts your chats into folders like Work and Personal, so family and work stay apart.
+Messenger's apps are heavy and built to keep you scrolling. Tuon is Facebook Messenger for the terminal, and it keeps only the conversations: no feed, stories, ads or suggestions. It runs in a terminal window, uses about 40 MB of memory, and sorts your chats into folders like Work and Personal, so family and work stay apart.
 
 It's a personal tool that talks to Messenger the unofficial way. Read [Before you use it](#before-you-use-it) first.
 
@@ -50,7 +50,7 @@ cd tuon
 
 This builds `tuon`, its chat app `tuon-app` and its small Touch ID helper (`tuon-keyhelper`, which needs Apple's command line tools: `xcode-select --install`) into `~/.local/bin`, installs [Ghostty](https://ghostty.org) (the terminal that shows real photos) if you don't have it, then runs `tuon setup`.
 
-**Updating:** run `tuon update`. It downloads tuon fresh from GitHub into a temporary folder, installs the newest release tag signed by tuon's maintainer and skips anything unsigned, shows what changed, and asks before building if the update changes tuon's dependencies. Restart tuon afterwards if it was open. Coming from 0.3.0, run `tuon update` twice: the first run installs the new launcher, the second adds the chat app (`tuon-app`) next to it.
+**Updating:** tuon looks for a new release once a day (just the release names on GitHub). When there is one, it asks when you open it (`y` update now, `n` not now, `s` skip that version), and the header shows `tuon v… is out: :update`; type `:update` to install it and restart. Or run `tuon update`. `TUON_NO_UPDATE_CHECK=1` turns the daily look off. Either way, it downloads tuon fresh from GitHub into a temporary folder, installs the newest release tag signed by tuon's maintainer and skips anything unsigned, shows what changed, and asks before building if the update changes tuon's dependencies. Restart tuon afterwards if it was open. Coming from 0.3.0, run `tuon update` twice: the first run installs the new launcher, the second adds the chat app (`tuon-app`) next to it.
 
 **Linux:** `./install.sh` works the same, minus Ghostty. For photos, use kitty, Ghostty or WezTerm. For copy and paste, install `wl-clipboard` (Wayland) or `xclip` (X11); for attaching any file, `zenity` or `kdialog`. The chat app runs in a sandbox here too (Landlock, Linux 5.13 or later; 6.7 or later to hold it to Meta's servers).
 
@@ -139,7 +139,7 @@ From your shell:
 | `tuon` | Open tuon |
 | `tuon setup` / `tuon login` | Log in (and restore older encrypted chats with your PIN); `tuon login` then opens tuon |
 | `tuon history` | Restore older encrypted chats with your PIN |
-| `tuon update` | Install the newest signed release |
+| `tuon update` | Install the newest signed release (`:update` inside tuon does the same) |
 | `tuon relink` | Register tuon again as a new linked device, if one contact's messages keep failing to decrypt |
 | `tuon logout [--wipe]` | Forget your session (`--wipe`: and all local data) |
 | `tuon version` | Which release you have (`dev` when built from a checkout that isn't a release tag) |

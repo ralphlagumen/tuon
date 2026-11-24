@@ -6,6 +6,10 @@ and versions follow [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Update notices: once a day tuon looks for a newer release. When there is one, it asks as you open tuon (update now,
+  not now, or skip that version), and the header says `tuon v… is out: :update`. `:update` installs the newest
+  signed release and restarts tuon (the launcher does it; the sandboxed app can't). `TUON_NO_UPDATE_CHECK=1` turns
+  the look off.
 - A loading screen at startup: the chat screen shows blurred behind a floating card with a progress bar and what it's syncing (Messenger, encrypted chats, the chat list with a count)
   and takes no input but `q` until all three are done, so you don't read or answer a half-synced list. If it fails
   or takes over 45 seconds, `enter` opens your saved chats anyway. Later reconnects don't block; the header shows
