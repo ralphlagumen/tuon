@@ -253,8 +253,10 @@ func (c *Conn) onMeta(ctx context.Context, raw any) {
 		c.fetchOnce.Do(func() { go c.fetchMoreThreads() })
 	case *messagix.ReconnectedEvent:
 		c.status("connected", nil)
+		c.emit(connector.SyncEvent{Part: connector.SyncMessenger, Done: true, Chats: int(c.threadsSeen.Load())})
 	case *messagix.TransientDisconnectEvent:
 		c.status("reconnecting", nil)
+		c.emit(connector.SyncEvent{Part: connector.SyncMessenger, Lost: true})
 	case *messagix.PermanentErrorEvent:
 		c.status("disconnected", evt.Err)
 	}
@@ -643,6 +645,7 @@ func (c *Conn) onWA(raw any) {
 	switch raw.(type) {
 	case *events.Disconnected:
 		c.status("reconnecting encrypted chats…", nil)
+		c.emit(connector.SyncEvent{Part: connector.SyncEncrypted, Lost: true})
 		return
 	case *events.Connected:
 		c.status("connected", nil)

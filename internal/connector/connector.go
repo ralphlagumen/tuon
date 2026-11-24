@@ -135,9 +135,12 @@ type (
 	// SyncEvent: a startup step finished (Done) or moved on. Part is
 	// SyncMessenger, SyncEncrypted or SyncChats; Chats counts the chats
 	// seen so far; Err says a step ended without working (it's still done).
+	// Lost: the step came undone (the connection dropped); a Done follows
+	// once it's back.
 	SyncEvent struct {
 		Part  string
 		Done  bool
+		Lost  bool
 		Chats int
 		Err   error
 	}

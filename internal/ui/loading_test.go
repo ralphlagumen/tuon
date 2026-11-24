@@ -111,3 +111,73 @@ func TestNoLoadingByDefault(t *testing.T) {
 		t.Fatal("loading screen without WaitForSync")
 	}
 }
+
+// TestReconnectScreen: a dropped connection brings the loading screen
+// back (blurred, keys ignored, no "Seen") until it's connected again; the
+// draft and the open chat stay as they were.
+func TestReconnectScreen(t *testing.T) {
+	m, st, _ := newTestModel(t, 100, 30)
+	_ = st.UpsertChat(connector.Chat{ID: "1", Name: "Alice", LastActivity: time.Now()})
+	_ = st.SetSpace("1", m.space)
+	m.reloadChats()
+	m.WaitForSync()
+	for _, s := range syncSteps {
+		m = sync(m, s, true, 1, nil)
+	}
+	if m.loading {
+		t.Fatal("setup: should be past startup")
+	}
+	m = key(m, "enter") // open Alice
+	m.input.SetValue("half a thought")
+
+	lose := func(part string) {
+		next, cmd := m.Update(EventsMsg{connector.SyncEvent{Part: part, Lost: true}})
+		m = next.(Model)
+		if cmd == nil {
+			t.Fatal("the screen's timer should start")
+		}
+	}
+	lose(connector.SyncMessenger)
+	screen := ansi.Strip(m.View())
+	if !m.loading || !strings.Contains(screen, "reconnecting") || !strings.Contains(screen, "Reconnecting to Messenger") ||
+		!strings.Contains(screen, "✓ Encrypted chats") || strings.Contains(screen, "Alice") {
+		t.Fatalf("reconnect screen not shown:\n%s", screen)
+	}
+	m = key(m, "x")
+	if m.input.Value() != "half a thought" {
+		t.Fatal("keys must do nothing while reconnecting")
+	}
+	// encrypted chats drop too while Messenger is still down
+	next, _ := m.Update(EventsMsg{connector.SyncEvent{Part: connector.SyncEncrypted, Lost: true}})
+	m = next.(Model)
+	m = sync(m, connector.SyncMessenger, true, 1, nil)
+	if !m.loading {
+		t.Fatal("encrypted chats still reconnecting")
+	}
+	m = sync(m, connector.SyncEncrypted, true, 0, nil)
+	if m.loading || m.reconnect || m.chat == nil || m.input.Value() != "half a thought" {
+		t.Fatalf("should be back in the chat with the draft: loading=%v chat=%v draft=%q", m.loading, m.chat != nil, m.input.Value())
+	}
+
+	// gave up: enter lets you read offline
+	lose(connector.SyncMessenger)
+	next, _ = m.Update(EventsMsg{connector.StatusEvent{Text: "disconnected", Err: errors.New("logged out elsewhere")}})
+	m = next.(Model)
+	if !strings.Contains(ansi.Strip(m.View()), "logged out elsewhere") {
+		t.Fatalf("should say why:\n%s", ansi.Strip(m.View()))
+	}
+	m = key(m, "enter")
+	if m.loading {
+		t.Fatal("enter should let you in offline")
+	}
+}
+
+// TestNoReconnectScreenWithout: front ends without the loading screen
+// (tests, other front ends) don't get one on a reconnect either.
+func TestNoReconnectScreenWithout(t *testing.T) {
+	m, _, _ := newTestModel(t, 100, 30)
+	next, _ := m.Update(EventsMsg{connector.SyncEvent{Part: connector.SyncMessenger, Lost: true}})
+	if next.(Model).loading {
+		t.Fatal("no loading screen without WaitForSync")
+	}
+}

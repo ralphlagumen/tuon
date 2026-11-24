@@ -16,8 +16,10 @@ import (
 // no input (but q) until Messenger is connected, encrypted chats are up
 // (or known unavailable) and the chat list is complete. Reading and
 // replying to a half-synced list showed stale chats and unread marks.
-// Only at startup: a later reconnect keeps tuon usable, with the status in
-// the header.
+// A dropped connection later brings the same screen back until Messenger
+// and encrypted chats are connected again (the chat list is kept), so you
+// don't read or reply to chats that aren't updating. Your draft and place
+// stay as they were.
 
 // loadSkipAfter: after this long, enter lets you in anyway (a step that
 // never finishes mustn't lock you out of your saved chats).
@@ -40,24 +42,51 @@ func (m *Model) WaitForSync() {
 	m.syncErr = map[string]string{}
 }
 
-// onSync records a startup step; the screen goes once all are done.
-func (m *Model) onSync(e connector.SyncEvent) {
+// onSync records a startup step; the screen goes once all are done. A
+// lost step brings it back; true: it just came back (start its timer).
+func (m *Model) onSync(e connector.SyncEvent) bool {
 	if e.Chats > m.syncChats {
 		m.syncChats = e.Chats
 	}
+	if e.Lost {
+		return m.lost(e.Part)
+	}
 	if !m.loading || !e.Done {
-		return
+		return false
 	}
 	m.syncDone[e.Part] = true
+	delete(m.syncErr, e.Part)
 	if e.Err != nil {
 		m.syncErr[e.Part] = e.Err.Error()
 	}
 	for _, s := range syncSteps {
 		if !m.syncDone[s] {
-			return
+			return false
 		}
 	}
-	m.loading = false
+	m.loading, m.reconnect = false, false
+	return false
+}
+
+// lost: a connected step dropped. Only once startup is over (and only in
+// tuon-app, which turns the screen on); during startup it's still pending.
+func (m *Model) lost(part string) bool {
+	if m.syncDone == nil {
+		return false // no loading screen in this front end
+	}
+	if m.loading {
+		if m.reconnect {
+			m.syncDone[part] = false
+		}
+		return false
+	}
+	m.loading, m.reconnect = true, true
+	m.loadStart, m.loadFailed = time.Now(), ""
+	m.syncErr = map[string]string{}
+	for _, s := range syncSteps {
+		m.syncDone[s] = s != part
+	}
+	return true
 }
 
 func (m Model) canSkipLoading() bool {
@@ -70,9 +99,12 @@ func (m Model) onLoadingKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case "enter":
 		if m.canSkipLoading() {
-			m.loading = false
+			m.loading, m.reconnect = false, false
 			if m.loadFailed != "" {
 				return m, m.flash("Offline: showing your saved chats")
+			}
+			if m.reconnect {
+				return m, m.flash("Still reconnecting: new messages may not show for a moment")
 			}
 			return m, m.flash("Still syncing: chats may be out of date for a moment")
 		}
@@ -158,14 +190,18 @@ func (m Model) loadingCard() []string {
 	bar := sAccent.Render(strings.Repeat("━", fill)) + sFaint.Render(strings.Repeat("━", barW-fill)) +
 		sMuted.Render(fmt.Sprintf("  %d of %d", done, len(syncSteps)))
 
+	what, connecting, encrypting := "syncing", "Connecting to Messenger", "Connecting encrypted chats"
+	if m.reconnect {
+		what, connecting, encrypting = "reconnecting", "Reconnecting to Messenger", "Reconnecting encrypted chats"
+	}
 	body := []string{
 		"",
-		sAccentB.Render(brand) + sMuted.Render("  ·  syncing"),
+		sAccentB.Render(brand) + sMuted.Render("  ·  "+what),
 		"",
 		bar,
 		"",
-		step(connector.SyncMessenger, "Connecting to Messenger", "Connected to Messenger"),
-		step(connector.SyncEncrypted, "Connecting encrypted chats", "Encrypted chats"),
+		step(connector.SyncMessenger, connecting, "Connected to Messenger"),
+		step(connector.SyncEncrypted, encrypting, "Encrypted chats"),
 		step(connector.SyncChats, fetching, chats),
 		"",
 	}

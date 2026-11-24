@@ -12,8 +12,9 @@ and versions follow [Semantic Versioning](https://semver.org/).
   the look off.
 - A loading screen at startup: the chat screen shows blurred behind a floating card with a progress bar and what it's syncing (Messenger, encrypted chats, the chat list with a count)
   and takes no input but `q` until all three are done, so you don't read or answer a half-synced list. If it fails
-  or takes over 45 seconds, `enter` opens your saved chats anyway. Later reconnects don't block; the header shows
-  them.
+  or takes over 45 seconds, `enter` opens your saved chats anyway. When the connection drops later (sleep, a
+  network change), the same screen says "reconnecting" until Messenger and encrypted chats are back; your draft and
+  open chat stay as they were, and nothing is marked "Seen" behind it.
 - `:keys` (`:k`) in an encrypted 1:1 shows the person's device keys and yours, in the same form Messenger's app
   shows under "Verify end-to-end encryption". Compare them on your phone and press `v` to mark them verified: the
   header then says "verified", and if their keys change later (checked when you open the chat and when Messenger

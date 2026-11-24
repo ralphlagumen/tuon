@@ -166,6 +166,7 @@ type Model struct {
 	status string
 	// startup loading screen (loading.go)
 	loading    bool
+	reconnect  bool // the loading screen is back for a dropped connection
 	loadStart  time.Time
 	loadFailed string
 	syncDone   map[string]bool
@@ -607,11 +608,12 @@ func (m *Model) applyEvents(evts []any) tea.Cmd {
 	openID := "" // a chat you're in (not just previewing) stays read
 	// while locked you aren't reading: nothing is marked read here or sent
 	// to Meta as "Seen" (audit A13-1); unlocking does that for the open chat.
-	// Same while the terminal window is in the background (A13-4).
-	if m.chat != nil && m.focus == focusChat && !m.locked && !m.away {
+	// Same while the terminal window is in the background (A13-4), or the
+	// chat is hidden behind the reconnecting screen.
+	if m.chat != nil && m.focus == focusChat && !m.locked && !m.away && !m.loading {
 		openID = m.chat.ID
 	}
-	chime := false
+	chime, ticks, wasLoading := false, false, m.loading
 	var refills []tea.Cmd
 	for _, e := range evts {
 		switch e := e.(type) {
@@ -673,8 +675,13 @@ func (m *Model) applyEvents(evts []any) tea.Cmd {
 			m.keysWarn = fmt.Sprintf("Messages from %s keep failing to decrypt live (they still arrive through your backup). If this keeps up, quit and run `tuon relink`.", firstName(who))
 			m.Warn(m.keysWarn)
 		case connector.SyncEvent:
-			m.onSync(e)
+			if m.onSync(e) {
+				ticks = true
+			}
 		case connector.StatusEvent:
+			if e.Err != nil && m.reconnect && m.loading { // gave up reconnecting
+				m.loadFailed = e.Err.Error()
+			}
 			m.status, m.statusErr = e.Text, e.Err != nil
 			if e.Err != nil {
 				m.status += ": " + e.Err.Error()
@@ -682,6 +689,9 @@ func (m *Model) applyEvents(evts []any) tea.Cmd {
 		}
 	}
 	_ = m.st.MergeOneToOne()
+	if wasLoading && !m.loading && m.chat != nil && m.focus == focusChat && !m.locked && !m.away {
+		openID = m.chat.ID // back from reconnecting: you see the chat again
+	}
 	if openID != "" {
 		openID = m.st.Resolve(openID)
 		_ = m.st.MarkRead(openID)
@@ -690,6 +700,9 @@ func (m *Model) applyEvents(evts []any) tea.Cmd {
 	cmd := tea.Batch(append(refills, m.reloadMessages())...)
 	if openID != "" {
 		cmd = tea.Batch(cmd, m.sendRead(true)) // new messages in the chat you're in
+	}
+	if ticks {
+		cmd = tea.Batch(cmd, loadLater())
 	}
 	if chime && m.soundOn && time.Since(m.lastChime) > 2*time.Second {
 		m.lastChime = time.Now()
