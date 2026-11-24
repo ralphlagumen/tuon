@@ -2323,11 +2323,11 @@ func (m Model) saveImage(ref string, open bool) tea.Cmd {
 			}
 			return toastMsg{"opened in viewer"}
 		}
-		path := filepath.Join(downloadsDir(), "tuon-"+time.Now().Format("20060102-150405")+extFor(b))
-		if err := os.WriteFile(path, b, 0o600); err != nil {
+		path, err := saveDownload(b, "tuon-"+time.Now().Format("20060102-150405")+extFor(b), false)
+		if err != nil {
 			return toastMsg{"save failed: " + err.Error()}
 		}
-		return toastMsg{"saved " + path}
+		return toastMsg{"saved " + shortHome(path)}
 	}
 }
 
@@ -2639,38 +2639,49 @@ func (m *Model) saveFile(md connector.Media) tea.Cmd {
 		if err != nil {
 			return toastMsg{"couldn't save the file: " + err.Error()}
 		}
-		if c := opener.Connect(); c != nil {
-			// sandboxed: the app can't write Downloads; the launcher moves
-			// the file there and marks it as downloaded
-			dir := filepath.Join(os.TempDir(), "tuon")
-			_ = os.MkdirAll(dir, 0o700)
-			f, err := os.CreateTemp(dir, "save-*")
-			if err != nil {
-				return toastMsg{"couldn't save the file: " + err.Error()}
-			}
-			_, err = f.Write(b)
-			if cerr := f.Close(); err == nil {
-				err = cerr
-			}
-			if err != nil {
-				_ = safefile.Shred(f.Name())
-				return toastMsg{"couldn't save the file: " + err.Error()}
-			}
-			rep, err := c.Do(opener.OpSave, f.Name(), safeFileName(md.Name))
-			if err != nil {
-				_ = safefile.Shred(f.Name())
-				return toastMsg{"couldn't save the file: " + err.Error()}
-			}
-			return toastMsg{"Saved to " + shortHome(rep.Text)}
-		}
-		path := uniquePath(filepath.Join(downloadsDir(), safeFileName(md.Name)))
-		if err := os.WriteFile(path, b, 0o600); err != nil {
+		path, err := saveDownload(b, safeFileName(md.Name), true)
+		if err != nil {
 			return toastMsg{"couldn't save the file: " + err.Error()}
 		}
-		_ = markDownloaded(path) // the OS warns before running it, like a browser download
-		_ = revealFile(path)
 		return toastMsg{"Saved to " + shortHome(path)}
 	})
+}
+
+// saveDownload puts b in Downloads as name (a free name like it when
+// taken), marked as downloaded from the internet, and says where.
+// Sandboxed, the app can't write Downloads: the launcher moves it there.
+func saveDownload(b []byte, name string, reveal bool) (string, error) {
+	if c := opener.Connect(); c != nil {
+		dir := filepath.Join(os.TempDir(), "tuon")
+		_ = os.MkdirAll(dir, 0o700)
+		f, err := os.CreateTemp(dir, "save-*")
+		if err != nil {
+			return "", err
+		}
+		_, err = f.Write(b)
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+		if err != nil {
+			_ = safefile.Shred(f.Name())
+			return "", err
+		}
+		rep, err := c.Do(opener.OpSave, f.Name(), name)
+		if err != nil {
+			_ = safefile.Shred(f.Name())
+			return "", err
+		}
+		return rep.Text, nil
+	}
+	path := uniquePath(filepath.Join(downloadsDir(), name))
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		return "", err
+	}
+	_ = markDownloaded(path) // the OS warns before running it, like a browser download
+	if reveal {
+		_ = revealFile(path)
+	}
+	return path, nil
 }
 
 func hasPhoto(msg store.MessageRow) bool {

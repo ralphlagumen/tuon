@@ -5,6 +5,11 @@ and versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-24
+
+**Upgrading from 0.4.0:** run `tuon update` once. From 0.5.0 on, tuon tells you when a release is out and `:update`
+installs it.
+
 ### Added
 - Update notices: once a day tuon looks for a newer release. When there is one, it asks as you open tuon (update now,
   not now, or skip that version), and the header says `tuon v… is out: :update`. `:update` installs the newest
@@ -37,6 +42,8 @@ and versions follow [Semantic Versioning](https://semver.org/).
 - Real names over group nicknames when tagging and in who reacted.
 
 ### Fixed
+- Saving a photo from the photo viewer (`s`) works again: since the app lost write access to Downloads, it
+  failed; it now goes through the launcher like saved files.
 - Windows builds of the launcher compile again (the gate's signal handling and saving used Unix-only calls).
 - Saving a file on Linux works (it needed the macOS quarantine mark).
 - A chat you read on your phone (or the web) now shows as read in tuon too, also with read receipts off on the
@@ -196,7 +203,8 @@ First release.
 - `:previews off` for shoulder-surfing.
 - `tuon update` (signed release tags only) and `tuon relink`.
 
-[Unreleased]: https://github.com/ralphlagumen/tuon/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/ralphlagumen/tuon/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/ralphlagumen/tuon/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/ralphlagumen/tuon/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/ralphlagumen/tuon/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/ralphlagumen/tuon/releases/tag/v0.2.0
